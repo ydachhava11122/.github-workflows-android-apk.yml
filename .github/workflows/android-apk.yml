@@ -49,10 +49,13 @@ jobs:
           cd extracted
           npm run build
 
-      - name: Install Capacitor CLI
+      - name: Install Capacitor Android
         run: |
           cd extracted
           npm install @capacitor/cli --save-dev --legacy-peer-deps
+          CAP_VERSION=$(node -p "require('./node_modules/@capacitor/core/package.json').version")
+          echo "Capacitor Core version: $CAP_VERSION"
+          npm install "@capacitor/android@$CAP_VERSION" --save --legacy-peer-deps
 
       - name: Sync Android
         run: |
@@ -91,6 +94,7 @@ jobs:
           name: AAKNOVA-Android-APK
           path: extracted/android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+          
           
           
           
