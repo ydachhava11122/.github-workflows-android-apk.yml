@@ -39,11 +39,6 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android platform and build-tools
-        run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager "platforms;android-34" "build-tools;34.0.0"
-
       - name: Setup Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -106,32 +101,6 @@ jobs:
             echo "storePassword=$KS_PASS"
             echo "keyAlias=$KS_ALIAS"
             echo "keyPassword=$KEY_PASS"
-          } > keystore.properties
-
-      - name: Build signed release APK
-        working-directory: android
-        run: gradle assembleRelease --no-daemon --stacktrace
-
-      - name: Verify APK signature
-        run: |
-          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)"
-          "$APKSIGNER" verify --verbose android/app/build/outputs/apk/release/app-release.apk
-
-      - name: Upload APK (Artifacts)
-        uses: actions/upload-artifact@v4
-        with:
-          name: aaknova-android-apk
-          path: android/app/build/outputs/apk/release/app-release.apk
-          if-no-files-found: error
-
-      - name: Publish APK to GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: apk-build-${{ github.run_number }}
-          name: AAKNOVA APK build ${{ github.run_number }}
-          files: android/app/build/outputs/apk/release/app-release.apk
-          prerelease: true
-          
           
           
           
