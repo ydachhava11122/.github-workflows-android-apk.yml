@@ -8,121 +8,72 @@ on:
       - "*.zip"
       - ".github/workflows/android-apk.yml"
 
-permissions:
-  contents: read
-
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Java 17
+      - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
 
       - name: Setup Android SDK
-        run: |
-          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> $GITHUB_ENV
-          echo "/usr/local/lib/android/sdk/platform-tools" >> $GITHUB_PATH
-          echo "/usr/local/lib/android/sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
+        uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK packages
+      - name: Find ZIP File
+        id: zip
         run: |
-          yes | sdkmanager --licenses || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-
-      - name: Extract project ZIP
-        run: |
-          mkdir -p extracted
-          ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
-
+          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Project ZIP nahi mili."
+            echo "No project ZIP found"
             exit 1
           fi
+          echo "file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
 
-          unzip -q "$ZIP_FILE" -d extracted
-
-      - name: Locate project folder
+      - name: Extract Project
         run: |
-          PROJECT_DIR=$(find extracted -type f \( -name "capacitor.config.json" -o -name "capacitor.config.ts" -o -name "capacitor.config.js" \) -printf '%h\n' | head -n 1)
+          mkdir extracted
+          unzip -q "${{ steps.zip.outputs.file }}" -d extracted
+          echo "PROJECT_DIR=$GITHUB_WORKSPACE/extracted" >> "$GITHUB_ENV"
 
-          if [ -z "$PROJECT_DIR" ]; then
-            PROJECT_DIR=$(find extracted -type f -name "package.json" -printf '%h\n' | head -n 1)
-          fi
-
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: package.json nahi mili."
-            exit 1
-          fi
-
-          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
-
-      - name: Install dependencies and fix react-is
+      - name: Install Dependencies
         run: |
           cd "$PROJECT_DIR"
+          npm install
 
-          npm pkg set 'devDependencies.esbuild=^0.28.2'
-          npm install --legacy-peer-deps
-
-          REACT_VERSION=$(node -p "require('./node_modules/react/package.json').version")
-          echo "React version: $REACT_VERSION"
-
-          npm install "react-is@$REACT_VERSION" --save --legacy-peer-deps
-
-      - name: Build web app
+      - name: Build Web App
         run: |
           cd "$PROJECT_DIR"
           npm run build
 
-      - name: Setup Capacitor Android
+      - name: Install Capacitor Android
         run: |
           cd "$PROJECT_DIR"
-
-          npm install @capacitor/core @capacitor/cli @capacitor/android --legacy-peer-deps
-
-          if [ ! -f capacitor.config.json ] && [ ! -f capacitor.config.ts ] && [ ! -f capacitor.config.js ]; then
-            npx cap init AAKNOVA com.aaknova.app --web-dir=dist
-          fi
-
-          if [ ! -d android ]; then
-            npx cap add android
-          fi
-
+          npm install @capacitor/android
           npx cap sync android
-
-      - name: Prepare Gradle
-        run: |
-          cd "$PROJECT_DIR/android"
-
-          if [ ! -f gradlew ]; then
-            gradle wrapper --gradle-version 8.13
-          fi
-
-          chmod +x gradlew
 
       - name: Build APK
         run: |
           cd "$PROJECT_DIR/android"
-          ./gradlew assembleDebug --no-daemon
+          chmod +x gradlew
+          ./gradlew assembleDebug
 
-      - name: Upload AAKNOVA APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: AAKNOVA-Android-APK
-          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
+          name: AAKNOVA-APK
+          path: extracted/android/app/build/outputs/apk/debug/*.apk
           
           
           
