@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "*.zip"
+      - "**"
       - ".github/workflows/android-apk.yml"
 
 jobs:
@@ -26,50 +26,69 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Locate Android SDK Manager
+      - name: Find and Extract ZIP
         run: |
-          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)
+          mkdir -p extracted
 
-          if [ -z "$SDKMANAGER" ]; then
-            echo "ERROR: sdkmanager not found"
+          ZIP_FILE=$(find . -type f -name "*.zip" | head -n 1)
+
+          if [ -n "$ZIP_FILE" ]; then
+            echo "Extracting: $ZIP_FILE"
+            unzip -o "$ZIP_FILE" -d extracted
+          else
+            echo "No ZIP found, checking repository files"
+          fi
+
+      - name: Locate Android Project
+        run: |
+          PROJECT_DIR=""
+
+          for ROOT in . extracted; do
+            FOUND=$(find "$ROOT" -type f -name gradlew -printf '%h\n' 2>/dev/null | head -n 1)
+
+            if [ -n "$FOUND" ]; then
+              PROJECT_DIR="$FOUND"
+              break
+            fi
+          done
+
+          if [ -z "$PROJECT_DIR" ]; then
+            FOUND=$(find . -type f -name capacitor.settings.gradle -printf '%h\n' 2>/dev/null | head -n 1)
+            if [ -n "$FOUND" ]; then
+              PROJECT_DIR="$FOUND"
+            fi
+          fi
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: Android project not found"
+            echo "Repository files:"
+            find . -maxdepth 5 -type f | head -200
             exit 1
           fi
 
-          echo "SDKMANAGER=$SDKMANAGER" >> $GITHUB_ENV
-          echo "$(dirname "$SDKMANAGER")" >> $GITHUB_PATH
-          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Android project found: $PROJECT_DIR"
 
-      - name: Accept Android Licenses
-        run: |
-          yes | "$SDKMANAGER" --licenses || true
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
 
       - name: Install Android Packages
         run: |
-          "$SDKMANAGER" --install \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)
+          yes | "$SDKMANAGER" --licenses || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.13"
 
-      - name: Find Android Project
-        run: |
-          PROJECT_DIR=$(find . -type f -name capacitor.settings.gradle -printf '%h\n' | head -n 1)
-
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Android project not found"
-            exit 1
-          fi
-
-          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
-
       - name: Generate Gradle Wrapper
         run: |
           cd "$PROJECT_DIR"
-          gradle wrapper --gradle-version 8.13
+          if [ ! -f gradlew ]; then
+            gradle wrapper --gradle-version 8.13
+          fi
           chmod +x gradlew
 
       - name: Build APK
