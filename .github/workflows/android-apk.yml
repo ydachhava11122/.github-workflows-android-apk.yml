@@ -21,7 +21,7 @@ jobs:
         with:
           node-version: 22
 
-      - name: Find and Extract ZIP
+      - name: Extract Project ZIP
         run: |
           ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
 
@@ -53,11 +53,11 @@ jobs:
           cd "$PROJECT_DIR"
           npm install --legacy-peer-deps
 
-      - name: Install Capacitor
+      - name: Install Capacitor CLI
         run: |
           cd "$PROJECT_DIR"
-          npm install @capacitor/core @capacitor/android --legacy-peer-deps
-          npx cap --version
+          npm install @capacitor/core @capacitor/cli @capacitor/android --legacy-peer-deps
+          ./node_modules/.bin/cap --version
 
       - name: Build Web App
         run: |
@@ -72,10 +72,10 @@ jobs:
           cd "$PROJECT_DIR"
 
           if [ ! -d android ]; then
-            npx cap add android
+            ./node_modules/.bin/cap add android
           fi
 
-          npx cap sync android
+          ./node_modules/.bin/cap sync android
 
       - name: Build APK
         run: |
