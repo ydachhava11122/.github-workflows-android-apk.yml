@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Java 17
@@ -25,11 +25,22 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Accept All Android Licenses
+        run: |
+          yes | sdkmanager --licenses || true
+
+      - name: Install Android SDK Packages
+        run: |
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
       - name: Find and Extract ZIP
         run: |
           ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Project ZIP not found"
+            echo "ERROR: ZIP file not found"
             exit 1
           fi
           mkdir extracted
@@ -39,16 +50,15 @@ jobs:
         run: |
           PROJECT_DIR=$(find extracted -type f -name gradlew -printf '%h\n' | head -n 1)
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: gradlew not found in ZIP"
+            echo "ERROR: gradlew not found"
             exit 1
           fi
           echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
 
-      - name: Build Android APK
+      - name: Build APK
         run: |
           cd "$PROJECT_DIR"
           chmod +x gradlew
-          ./gradlew --version
           ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK
@@ -57,6 +67,7 @@ jobs:
           name: AAKNOVA-Android-APK
           path: "**/build/outputs/apk/debug/*.apk"
           if-no-files-found: error
+          
           
           
           
