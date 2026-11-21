@@ -12,61 +12,75 @@ jobs:
   build:
     runs-on: ubuntu-22.04
 
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Java
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Setup Android SDK Environment
+        run: |
+          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
-      - name: Accept SDK Licenses
-        run: yes | sdkmanager --licenses || true
+      - name: Accept Android SDK Licenses
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            --sdk_root="$ANDROID_HOME" --licenses
 
       - name: Install Android SDK
         run: |
-          sdkmanager --install \
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            --sdk_root="$ANDROID_HOME" \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
       - name: Extract ZIP
         run: |
-          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
+          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -1)
+
           if [ -z "$ZIP_FILE" ]; then
             echo "ERROR: ZIP not found"
             exit 1
           fi
+
           mkdir extracted
           unzip -q "$ZIP_FILE" -d extracted
 
-      - name: Locate Project
+      - name: Find Project
         run: |
-          echo "ZIP CONTENTS:"
-          find extracted -maxdepth 4 -type f | head -100
+          CONFIG=$(find extracted -type f \( \
+            -name capacitor.config.json -o \
+            -name capacitor.config.ts -o \
+            -name capacitor.config.js \
+            \) | head -1)
 
-          if find extracted -name capacitor.config.json -o -name capacitor.config.ts | grep -q .; then
-            CONFIG=$(find extracted -name capacitor.config.json -o -name capacitor.config.ts | head -1)
+          if [ -n "$CONFIG" ]; then
             PROJECT_DIR=$(dirname "$CONFIG")
-          elif find extracted -name package.json | grep -q .; then
-            PROJECT_DIR=$(dirname "$(find extracted -name package.json | head -1)")
           else
-            echo "ERROR: No project configuration found"
-            exit 1
+            PACKAGE=$(find extracted -type f -name package.json | head -1)
+            if [ -z "$PACKAGE" ]; then
+              echo "ERROR: package.json not found"
+              exit 1
+            fi
+            PROJECT_DIR=$(dirname "$PACKAGE")
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
-          echo "Project found: $PROJECT_DIR"
 
       - name: Install Dependencies
         run: |
@@ -78,7 +92,7 @@ jobs:
           cd "$PROJECT_DIR"
           npm run build --if-present
 
-      - name: Generate Android Project
+      - name: Prepare Android
         run: |
           cd "$PROJECT_DIR"
 
@@ -94,7 +108,12 @@ jobs:
       - name: Build APK
         run: |
           cd "$PROJECT_DIR/android"
-          gradle wrapper --gradle-version 8.13
+
+          if [ ! -f gradlew ]; then
+            echo "ERROR: Gradle wrapper missing from Android project"
+            exit 1
+          fi
+
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
@@ -102,7 +121,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: AAKNOVA-Android-APK
-          path: "extracted/**/build/outputs/apk/debug/*.apk"
+          path: "extracted/**/android/app/build/outputs/apk/debug/*.apk"
           if-no-files-found: error
           
           
