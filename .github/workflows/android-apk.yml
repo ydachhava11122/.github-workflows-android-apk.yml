@@ -20,14 +20,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
       - name: Find and Extract ZIP
         run: |
           ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Project ZIP file not found!"
+            echo "ZIP file not found!"
             exit 1
           fi
 
@@ -36,40 +35,39 @@ jobs:
 
       - name: Locate Project
         run: |
-          cd extracted
-
-          PROJECT_DIR=$(find . -name package.json \
+          PROJECT_DIR=$(find "$GITHUB_WORKSPACE/extracted" \
+            -name package.json \
             -not -path "*/node_modules/*" \
             -not -path "*/.git/*" \
             -printf '%h\n' | head -n 1)
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: package.json not found!"
+            echo "package.json not found!"
             exit 1
           fi
 
-          echo "PROJECT_DIR=$GITHUB_WORKSPACE/extracted/$PROJECT_DIR" >> $GITHUB_ENV
+          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
 
       - name: Install Dependencies
         run: |
           cd "$PROJECT_DIR"
           npm install
 
-      - name: Verify Capacitor
+      - name: Install Capacitor
         run: |
           cd "$PROJECT_DIR"
           npm install @capacitor/core @capacitor/android
-          node -e "console.log(require('./node_modules/@capacitor/core/package.json').version)"
+          npx cap --version
 
       - name: Build Web App
         run: |
           cd "$PROJECT_DIR"
           npm run build
 
-      - name: Setup Android
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Prepare Android Project
+      - name: Prepare Android
         run: |
           cd "$PROJECT_DIR"
 
