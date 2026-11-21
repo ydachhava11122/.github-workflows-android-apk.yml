@@ -29,10 +29,14 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          accept-android-sdk-licenses: false
+          packages: ''
 
-      - name: Accept Android Licenses
+      - name: Accept Android SDK Licenses
+        shell: bash
         run: |
-          yes | sdkmanager --licenses || true
+          yes | sdkmanager --licenses
 
       - name: Install Android SDK Packages
         run: |
@@ -43,7 +47,7 @@ jobs:
         run: |
           ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP file not found"
+            echo "ZIP file not found"
             exit 1
           fi
           echo "file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
