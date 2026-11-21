@@ -16,10 +16,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -30,57 +30,71 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Extract Project
+      - name: Extract AAKNOVA Project
         run: |
           mkdir extracted
-          ZIP=$(find . -maxdepth 1 -iname "*.zip" | head -n 1)
+
+          ZIP=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
+
           if [ -z "$ZIP" ]; then
             echo "ERROR: ZIP file not found"
             exit 1
           fi
+
           unzip -q "$ZIP" -d extracted
 
-          PACKAGE=$(find extracted -name package.json | head -n 1)
+          PACKAGE=$(find extracted -name package.json -not -path "*/node_modules/*" | head -n 1)
+
           if [ -z "$PACKAGE" ]; then
-            echo "ERROR: package.json not found. ZIP project format is not supported by this workflow."
+            echo "ERROR: package.json not found"
             find extracted -maxdepth 3 -type f | head -100
             exit 1
           fi
 
-          echo "PROJECT_DIR=$(dirname "$PACKAGE")" >> "$GITHUB_ENV"
+          PROJECT_DIR=$(dirname "$PACKAGE")
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          echo "Project found: $PROJECT_DIR"
 
       - name: Install Dependencies
         run: |
           cd "$PROJECT_DIR"
           npm install --legacy-peer-deps
+          npm install react-is --save --legacy-peer-deps
 
-      - name: Build Web App
+      - name: Build Web Application
         run: |
           cd "$PROJECT_DIR"
           npm run build
 
-      - name: Setup Capacitor
+      - name: Setup Capacitor Android
         run: |
           cd "$PROJECT_DIR"
-          npm install --no-save --legacy-peer-deps @capacitor/core @capacitor/cli @capacitor/android
+
+          npm install --save --legacy-peer-deps @capacitor/core @capacitor/cli @capacitor/android
+
           if [ ! -d android ]; then
             npx cap add android
           fi
+
           npx cap sync android
 
-      - name: Build APK
+      - name: Build Android APK
         run: |
           cd "$PROJECT_DIR/android"
+
           chmod +x gradlew
+
           ./gradlew assembleDebug
 
-      - name: Upload APK
+      - name: Upload AAKNOVA APK
         uses: actions/upload-artifact@v4
         with:
           name: AAKNOVA-Android-APK
           path: "**/app/build/outputs/apk/debug/*.apk"
           if-no-files-found: error
           retention-days: 14
+          
           
           
           
