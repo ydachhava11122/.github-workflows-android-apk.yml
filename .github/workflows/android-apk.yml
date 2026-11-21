@@ -30,24 +30,20 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          accept-android-sdk-licenses: false
-          packages: ''
-
-      - name: Accept Android SDK Licenses
-        shell: bash
-        run: |
-          yes | sdkmanager --licenses
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
+          packages: "platform-tools"
 
       - name: Install Android SDK Packages
         run: |
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
       - name: Find ZIP File
         id: zip
         run: |
           ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
           if [ -z "$ZIP_FILE" ]; then
-            echo "ZIP file not found"
+            echo "Project ZIP not found"
             exit 1
           fi
           echo "file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
@@ -86,6 +82,7 @@ jobs:
           name: AAKNOVA-APK
           path: extracted/android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+          
           
           
           
