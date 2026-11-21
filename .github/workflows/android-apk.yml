@@ -36,11 +36,11 @@ jobs:
           test -n "$PACKAGE" || exit 1
           echo "PROJECT_DIR=$(dirname "$PACKAGE")" >> $GITHUB_ENV
 
-      - name: Install and Build
+            - name: Install and Build
         run: |
           cd "$PROJECT_DIR"
-          npm install
-          npm install --no-save @capacitor/core @capacitor/cli @capacitor/android
+          npm install --legacy-peer-deps
+          npm install --no-save --legacy-peer-deps @capacitor/core @capacitor/cli @capacitor/android
           npm run build
           if [ ! -d android ]; then
             npx cap add android
