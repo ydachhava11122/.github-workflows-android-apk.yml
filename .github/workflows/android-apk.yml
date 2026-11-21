@@ -53,10 +53,15 @@ jobs:
           cd "$PROJECT_DIR"
           npm install --legacy-peer-deps
 
-      - name: Install Capacitor CLI
+      - name: Install Missing Dependencies
         run: |
           cd "$PROJECT_DIR"
+          npm install react-is --legacy-peer-deps
           npm install @capacitor/core @capacitor/cli @capacitor/android --legacy-peer-deps
+
+      - name: Verify Capacitor
+        run: |
+          cd "$PROJECT_DIR"
           ./node_modules/.bin/cap --version
 
       - name: Build Web App
