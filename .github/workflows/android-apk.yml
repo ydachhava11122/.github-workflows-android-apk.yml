@@ -1,3 +1,4 @@
+
 name: AAKNOVA Android APK Build
 
 on:
@@ -5,10 +6,6 @@ on:
   push:
     paths:
       - "*.zip"
-      - ".github/workflows/android-apk.yml"
-
-permissions:
-  contents: read
 
 jobs:
   build:
@@ -18,57 +15,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Extract AAKNOVA Project
+      - name: Check ZIP
         run: |
-          mkdir extracted
           ZIP=$(find . -maxdepth 1 -iname "*.zip" | head -n 1)
-          test -n "$ZIP" || exit 1
-          unzip -q "$ZIP" -d extracted
-          PACKAGE=$(find extracted -name package.json | head -n 1)
-          test -n "$PACKAGE" || exit 1
-          echo "PROJECT_DIR=$(dirname "$PACKAGE")" >> "$GITHUB_ENV"
-
-      - name: Install Dependencies
-        run: |
-          cd "$PROJECT_DIR"
-          npm install --legacy-peer-deps
-
-      - name: Build Web App
-        run: |
-          cd "$PROJECT_DIR"
-          npm run build
-
-      - name: Setup Capacitor
-        run: |
-          cd "$PROJECT_DIR"
-          npm install --no-save --legacy-peer-deps @capacitor/core @capacitor/cli @capacitor/android
-          if [ ! -d android ]; then
-            npx cap add android
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: No ZIP file found"
+            exit 1
           fi
-          npx cap sync android
+          mkdir extracted
+          unzip -q "$ZIP" -d extracted
+          echo "ZIP extracted successfully"
+          find extracted -maxdepth 3 -type f | head -100
 
-      - name: Build APK
+      - name: Find Project
         run: |
-          cd "$PROJECT_DIR/android"
-          chmod +x gradlew
-          ./gradlew assembleDebug
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: AAKNOVA-Android-APK
-          path: "**/app/build/outputs/apk/debug/*.apk"
-          if-no-files-found: error
-          retention-days: 14
+          PACKAGE=$(find extracted -name package.json | head -n 1)
+          if [ -z "$PACKAGE" ]; then
+            echo "ERROR: package.json missing from ZIP"
+            echo "Your ZIP may contain a different project format."
+            exit 1
+          fi
+          echo "PROJECT_DIR=$(dirname "$PACKAGE")" >> "$GITHUB_ENV"
+          
           
