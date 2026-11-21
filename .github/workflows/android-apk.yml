@@ -1,104 +1,133 @@
-
-name: AAKNOVA Android APK Build
+name: Build AAKNOVA Android APK
 
 on:
   workflow_dispatch:
   push:
-    paths:
-      - "*.zip"
-      - ".github/workflows/android-apk.yml"
+    branches: [main, master]
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build:
+  build-android-apk:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '22'
 
-      - name: Setup Java
+      - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: '17'
 
       - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform and build-tools
         run: |
-          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | head -n 1)
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0"
 
-          chmod +x "$SDKMANAGER"
+      - name: Setup Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
 
-          yes | "$SDKMANAGER" --licenses || true
-
-          "$SDKMANAGER" --install \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
-
-      - name: Extract Project ZIP
+      - name: Install dependencies
         run: |
-          ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
+          npm install --no-audit --no-fund --ignore-scripts
+          npm install --no-save --no-audit --no-fund --ignore-scripts \
+            @capacitor/core@^6.2.0 @capacitor/cli@^6.2.0 @capacitor/android@^6.2.0
 
-          if [ -z "$ZIP_FILE" ]; then
-            echo "Project ZIP not found"
-            exit 1
+      - name: Point app API calls to backend (optional)
+        env:
+          API_BASE_URL: ${{ vars.API_BASE_URL }}
+        run: |
+          if [ -n "$API_BASE_URL" ]; then
+            sed -i "s#const res = await fetch(url, {#const res = await fetch((import.meta.env.VITE_API_BASE_URL || '') + url, {#" src/lib/api.ts
+            grep -q "VITE_API_BASE_URL" src/lib/api.ts
+            echo "VITE_API_BASE_URL=${API_BASE_URL%/}" >> "$GITHUB_ENV"
+          else
+            echo "API_BASE_URL not set - app relative /api paths use karega."
           fi
 
-          mkdir -p extracted
-          unzip -q "$ZIP_FILE" -d extracted
+      - name: Build web bundle
+        run: npm run build
 
-          PACKAGE_FILE=$(find extracted -name package.json \
-            -not -path "*/node_modules/*" | head -n 1)
+      - name: Prepare Capacitor config
+        run: |
+          npx tsx -e "import c from './capacitor.config.ts'; import fs from 'node:fs'; fs.writeFileSync('capacitor.config.json', JSON.stringify(c, null, 2));"
+          rm -f capacitor.config.ts
+          test -f dist/index.html
 
-          if [ -z "$PACKAGE_FILE" ]; then
-            echo "package.json not found"
-            exit 1
+      - name: Sync web bundle into Android project
+        run: npx cap sync android
+
+      - name: Prepare signing key
+        env:
+          KS_B64: ${{ secrets.AAKNOVA_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.AAKNOVA_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.AAKNOVA_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.AAKNOVA_KEY_PASSWORD }}
+        run: |
+          cd android
+          if [ -n "$KS_B64" ] && [ -n "$KS_PASS" ] && [ -n "$KS_ALIAS" ]; then
+            echo "$KS_B64" | base64 -d > app/release.jks
+            : "${KEY_PASS:=$KS_PASS}"
+            echo "Using repository keystore."
+          else
+            KS_PASS="$(openssl rand -hex 16)"
+            KEY_PASS="$KS_PASS"
+            KS_ALIAS="aaknova-ci"
+            keytool -genkeypair -keystore app/release.jks -alias "$KS_ALIAS" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$KS_PASS" -keypass "$KEY_PASS" \
+              -dname "CN=AAKNOVA, OU=CI, O=AAKNOVA, C=IN"
+            echo "No keystore secrets found - temporary CI keystore generated."
           fi
+          {
+            echo "storeFile=release.jks"
+            echo "storePassword=$KS_PASS"
+            echo "keyAlias=$KS_ALIAS"
+            echo "keyPassword=$KEY_PASS"
+          } > keystore.properties
 
-          PROJECT_DIR=$(dirname "$PACKAGE_FILE")
+      - name: Build signed release APK
+        working-directory: android
+        run: gradle assembleRelease --no-daemon --stacktrace
 
-          echo "PROJECT_DIR=$GITHUB_WORKSPACE/$PROJECT_DIR" >> "$GITHUB_ENV"
-
-      - name: Install Dependencies
+      - name: Verify APK signature
         run: |
-          cd "$PROJECT_DIR"
-          npm install --legacy-peer-deps
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)"
+          "$APKSIGNER" verify --verbose android/app/build/outputs/apk/release/app-release.apk
 
-      - name: Build Web App
-        run: |
-          cd "$PROJECT_DIR"
-          npm run build
-
-      - name: Configure Capacitor
-        run: |
-          cd "$PROJECT_DIR"
-
-          npm install --no-save --legacy-peer-deps \
-            @capacitor/cli @capacitor/android
-
-          if [ ! -d android ]; then
-            npx cap add android
-          fi
-
-          npx cap sync android
-
-      - name: Build APK
-        run: |
-          cd "$PROJECT_DIR/android"
-          chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
-
-      - name: Upload APK
+      - name: Upload APK (Artifacts)
         uses: actions/upload-artifact@v4
         with:
-          name: AAKNOVA-Android-APK
-          path: "**/android/app/build/outputs/apk/debug/*.apk"
+          name: aaknova-android-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
+
+      - name: Publish APK to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-build-${{ github.run_number }}
+          name: AAKNOVA APK build ${{ github.run_number }}
+          files: android/app/build/outputs/apk/release/app-release.apk
+          prerelease: true
           
           
           
