@@ -34,49 +34,34 @@ jobs:
       - name: Extract AAKNOVA ZIP
         run: |
           ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP file not found"
-            exit 1
-          fi
-
+          test -n "$ZIP_FILE" || exit 1
           mkdir -p extracted
           unzip -o "$ZIP_FILE" -d extracted
 
-      - name: Install Website Dependencies
+      - name: Install Dependencies
         run: |
           cd extracted
-          npm install
+          npm install --legacy-peer-deps
 
-      - name: Build AAKNOVA Website
+      - name: Build Website
         run: |
           cd extracted
           npm run build
 
-      - name: Sync Capacitor Android
+      - name: Sync Capacitor
         run: |
           cd extracted
           npx cap sync android
 
-      - name: Accept Android SDK Licenses
+      - name: Accept Android Licenses
         run: |
           SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)
-
-          if [ -z "$SDKMANAGER" ]; then
-            echo "ERROR: SDK Manager not found"
-            exit 1
-          fi
-
           yes | "$SDKMANAGER" --licenses || true
 
       - name: Install Android SDK
         run: |
           SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)
-
-          "$SDKMANAGER" \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -86,11 +71,10 @@ jobs:
       - name: Generate Gradle Wrapper
         run: |
           cd extracted/android
-
           gradle wrapper --gradle-version 8.13
           chmod +x gradlew
 
-      - name: Build AAKNOVA APK
+      - name: Build APK
         run: |
           cd extracted/android
           ./gradlew assembleDebug --no-daemon
