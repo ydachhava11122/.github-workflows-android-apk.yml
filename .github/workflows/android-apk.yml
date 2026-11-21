@@ -31,10 +31,10 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Extract AAKNOVA ZIP
+      - name: Extract ZIP
         run: |
           ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
-          test -n "$ZIP_FILE" || exit 1
+          test -n "$ZIP_FILE"
           mkdir -p extracted
           unzip -o "$ZIP_FILE" -d extracted
 
@@ -49,10 +49,15 @@ jobs:
           cd extracted
           npm run build
 
-      - name: Sync Capacitor
+      - name: Install Capacitor CLI
         run: |
           cd extracted
-          npx cap sync android
+          npm install @capacitor/cli --save-dev --legacy-peer-deps
+
+      - name: Sync Android
+        run: |
+          cd extracted
+          npx --no-install cap sync android
 
       - name: Accept Android Licenses
         run: |
@@ -86,6 +91,7 @@ jobs:
           name: AAKNOVA-Android-APK
           path: extracted/android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+          
           
           
           
