@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "**"
+      - "*.zip"
       - ".github/workflows/android-apk.yml"
 
 jobs:
@@ -26,57 +26,57 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Find and Extract ZIP
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Extract AAKNOVA ZIP
         run: |
-          mkdir -p extracted
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
 
-          ZIP_FILE=$(find . -type f -name "*.zip" | head -n 1)
-
-          if [ -n "$ZIP_FILE" ]; then
-            echo "Extracting: $ZIP_FILE"
-            unzip -o "$ZIP_FILE" -d extracted
-          else
-            echo "No ZIP found, checking repository files"
-          fi
-
-      - name: Locate Android Project
-        run: |
-          PROJECT_DIR=""
-
-          for ROOT in . extracted; do
-            FOUND=$(find "$ROOT" -type f -name gradlew -printf '%h\n' 2>/dev/null | head -n 1)
-
-            if [ -n "$FOUND" ]; then
-              PROJECT_DIR="$FOUND"
-              break
-            fi
-          done
-
-          if [ -z "$PROJECT_DIR" ]; then
-            FOUND=$(find . -type f -name capacitor.settings.gradle -printf '%h\n' 2>/dev/null | head -n 1)
-            if [ -n "$FOUND" ]; then
-              PROJECT_DIR="$FOUND"
-            fi
-          fi
-
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Android project not found"
-            echo "Repository files:"
-            find . -maxdepth 5 -type f | head -200
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: ZIP file not found"
             exit 1
           fi
 
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Android project found: $PROJECT_DIR"
+          mkdir -p extracted
+          unzip -o "$ZIP_FILE" -d extracted
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Install Website Dependencies
+        run: |
+          cd extracted
+          npm install
 
-      - name: Install Android Packages
+      - name: Build AAKNOVA Website
+        run: |
+          cd extracted
+          npm run build
+
+      - name: Sync Capacitor Android
+        run: |
+          cd extracted
+          npx cap sync android
+
+      - name: Accept Android SDK Licenses
         run: |
           SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: SDK Manager not found"
+            exit 1
+          fi
+
           yes | "$SDKMANAGER" --licenses || true
-          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Install Android SDK
+        run: |
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)
+
+          "$SDKMANAGER" \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -85,22 +85,21 @@ jobs:
 
       - name: Generate Gradle Wrapper
         run: |
-          cd "$PROJECT_DIR"
-          if [ ! -f gradlew ]; then
-            gradle wrapper --gradle-version 8.13
-          fi
+          cd extracted/android
+
+          gradle wrapper --gradle-version 8.13
           chmod +x gradlew
 
-      - name: Build APK
+      - name: Build AAKNOVA APK
         run: |
-          cd "$PROJECT_DIR"
+          cd extracted/android
           ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: AAKNOVA-APK
-          path: "**/build/outputs/apk/debug/*.apk"
+          name: AAKNOVA-Android-APK
+          path: extracted/android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           
           
