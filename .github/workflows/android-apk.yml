@@ -20,9 +20,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
-      - name: Setup Java 21
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -30,14 +29,7 @@ jobs:
 
       - name: Setup Android SDK
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
-          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
-
-          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-
-          if [ ! -f "$SDKMANAGER" ]; then
-            SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | head -n 1)
-          fi
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | head -n 1)
 
           chmod +x "$SDKMANAGER"
 
@@ -48,50 +40,46 @@ jobs:
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-      - name: Extract AAKNOVA ZIP
+      - name: Extract Project ZIP
         run: |
           ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Project ZIP not found!"
+            echo "Project ZIP not found"
             exit 1
           fi
 
           mkdir -p extracted
           unzip -q "$ZIP_FILE" -d extracted
 
-          PROJECT_DIR=$(find extracted -name package.json \
+          PACKAGE_FILE=$(find extracted -name package.json \
             -not -path "*/node_modules/*" | head -n 1)
 
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: package.json not found!"
+          if [ -z "$PACKAGE_FILE" ]; then
+            echo "package.json not found"
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$PROJECT_DIR")
+          PROJECT_DIR=$(dirname "$PACKAGE_FILE")
 
-          echo "PROJECT_DIR=$GITHUB_WORKSPACE/$PROJECT_DIR" >> $GITHUB_ENV
+          echo "PROJECT_DIR=$GITHUB_WORKSPACE/$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Install Dependencies
         run: |
           cd "$PROJECT_DIR"
           npm install --legacy-peer-deps
-          npm install --no-save esbuild@^0.28.2 react-is
 
-      - name: Build Web Application
+      - name: Build Web App
         run: |
           cd "$PROJECT_DIR"
           npm run build
 
-      - name: Setup Capacitor Android
+      - name: Configure Capacitor
         run: |
           cd "$PROJECT_DIR"
 
-          CAP_VERSION=$(node -p "require('./node_modules/@capacitor/core/package.json').version")
-
-          npm install --no-save \
-            "@capacitor/cli@$CAP_VERSION" \
-            "@capacitor/android@$CAP_VERSION"
+          npm install --no-save --legacy-peer-deps \
+            @capacitor/cli @capacitor/android
 
           if [ ! -d android ]; then
             npx cap add android
@@ -99,19 +87,17 @@ jobs:
 
           npx cap sync android
 
-      - name: Build Android APK
+      - name: Build APK
         run: |
           cd "$PROJECT_DIR/android"
-
           chmod +x gradlew
-
           ./gradlew assembleDebug --no-daemon
 
-      - name: Upload AAKNOVA APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: AAKNOVA-Android-APK
-          path: extracted/**/android/app/build/outputs/apk/debug/*.apk
+          path: "**/android/app/build/outputs/apk/debug/*.apk"
           if-no-files-found: error
           
           
