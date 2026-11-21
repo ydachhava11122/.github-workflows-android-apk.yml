@@ -12,12 +12,8 @@ jobs:
   build:
     runs-on: ubuntu-22.04
 
-    env:
-      ANDROID_HOME: /usr/local/lib/android/sdk
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Java
@@ -26,49 +22,79 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Setup Android SDK
-        run: |
-          mkdir -p "$ANDROID_HOME"
-          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
-          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
-          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
+        uses: android-actions/setup-android@v3
 
-      - name: Accept Android Licenses
-        run: |
-          mkdir -p "$ANDROID_HOME/licenses"
-          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$ANDROID_HOME/licenses/android-sdk-license"
-          echo "84831b9409646a918e30573bab4c9c91346d8abd" >> "$ANDROID_HOME/licenses/android-sdk-license"
+      - name: Accept SDK Licenses
+        run: yes | sdkmanager --licenses || true
 
-      - name: Install SDK Packages
+      - name: Install Android SDK
         run: |
-          yes | sdkmanager --licenses || true
           sdkmanager --install \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-      - name: Extract Project ZIP
+      - name: Extract ZIP
         run: |
           ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Project ZIP not found"
+            echo "ERROR: ZIP not found"
             exit 1
           fi
           mkdir extracted
           unzip -q "$ZIP_FILE" -d extracted
 
-      - name: Find Android Project
+      - name: Locate Project
         run: |
-          PROJECT_DIR=$(find extracted -type f -name gradlew -printf '%h\n' | head -n 1)
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: gradlew not found in ZIP"
+          echo "ZIP CONTENTS:"
+          find extracted -maxdepth 4 -type f | head -100
+
+          if find extracted -name capacitor.config.json -o -name capacitor.config.ts | grep -q .; then
+            CONFIG=$(find extracted -name capacitor.config.json -o -name capacitor.config.ts | head -1)
+            PROJECT_DIR=$(dirname "$CONFIG")
+          elif find extracted -name package.json | grep -q .; then
+            PROJECT_DIR=$(dirname "$(find extracted -name package.json | head -1)")
+          else
+            echo "ERROR: No project configuration found"
             exit 1
           fi
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
+          echo "Project found: $PROJECT_DIR"
+
+      - name: Install Dependencies
+        run: |
+          cd "$PROJECT_DIR"
+          npm install
+
+      - name: Build Web App
+        run: |
+          cd "$PROJECT_DIR"
+          npm run build --if-present
+
+      - name: Generate Android Project
+        run: |
+          cd "$PROJECT_DIR"
+
+          if [ ! -d android ]; then
+            npm install @capacitor/core @capacitor/cli @capacitor/android
+            npx cap add android
+          else
+            npm install @capacitor/android
+          fi
+
+          npx cap sync android
 
       - name: Build APK
         run: |
-          cd "$PROJECT_DIR"
+          cd "$PROJECT_DIR/android"
+          gradle wrapper --gradle-version 8.13
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
