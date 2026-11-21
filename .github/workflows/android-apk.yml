@@ -8,16 +8,15 @@ on:
       - "*.zip"
       - ".github/workflows/android-apk.yml"
 
+permissions:
+  contents: read
+
 jobs:
   build:
-    runs-on: ubuntu-22.04
-
-    env:
-      ANDROID_HOME: /usr/local/lib/android/sdk
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Java 17
@@ -30,99 +29,96 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
 
-      - name: Setup Android SDK Environment
+      - name: Setup Android SDK
         run: |
-          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
-          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+          echo "/usr/local/lib/android/sdk/platform-tools" >> $GITHUB_PATH
+          echo "/usr/local/lib/android/sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
-      - name: Accept Android SDK Licenses
+      - name: Accept Android licenses and install SDK
         run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            --sdk_root="$ANDROID_HOME" --licenses
+          yes | /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Install Android SDK
+      - name: Extract project ZIP
         run: |
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            --sdk_root="$ANDROID_HOME" \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
-
-      - name: Extract ZIP
-        run: |
-          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -1)
-
+          mkdir -p extracted
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP not found"
+            echo "ERROR: Repository root mein project ZIP nahi mili."
+            exit 1
+          fi
+          unzip -q "$ZIP_FILE" -d extracted
+          echo "Extracted project files:"
+          find extracted -maxdepth 3 -type f | head -100
+
+      - name: Locate project folder
+        run: |
+          PROJECT_DIR=$(find extracted -type f \( -name "capacitor.config.json" -o -name "capacitor.config.ts" -o -name "capacitor.config.js" \) -printf '%h\n' | head -n 1)
+
+          if [ -z "$PROJECT_DIR" ]; then
+            PROJECT_DIR=$(find extracted -type f -name "package.json" -printf '%h\n' | head -n 1)
+          fi
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: package.json ya Capacitor config nahi mili."
             exit 1
           fi
 
-          mkdir extracted
-          unzip -q "$ZIP_FILE" -d extracted
-
-      - name: Find Project
-        run: |
-          CONFIG=$(find extracted -type f \( \
-            -name capacitor.config.json -o \
-            -name capacitor.config.ts -o \
-            -name capacitor.config.js \
-            \) | head -1)
-
-          if [ -n "$CONFIG" ]; then
-            PROJECT_DIR=$(dirname "$CONFIG")
-          else
-            PACKAGE=$(find extracted -type f -name package.json | head -1)
-            if [ -z "$PACKAGE" ]; then
-              echo "ERROR: package.json not found"
-              exit 1
-            fi
-            PROJECT_DIR=$(dirname "$PACKAGE")
-          fi
-
           echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
+          echo "Project found: $PROJECT_DIR"
 
-      - name: Install Dependencies
+      - name: Fix esbuild and install dependencies
         run: |
           cd "$PROJECT_DIR"
-          npm install
+          npm pkg set 'devDependencies.esbuild=^0.28.2'
+          npm install --legacy-peer-deps
 
-      - name: Build Web App
+      - name: Build web app
         run: |
           cd "$PROJECT_DIR"
           npm run build --if-present
 
-      - name: Prepare Android
+      - name: Setup Capacitor Android
         run: |
           cd "$PROJECT_DIR"
+          npm install @capacitor/core @capacitor/cli @capacitor/android --legacy-peer-deps
+
+          if [ ! -f capacitor.config.json ] && [ ! -f capacitor.config.ts ] && [ ! -f capacitor.config.js ]; then
+            npx cap init AAKNOVA com.aaknova.app --web-dir=dist
+          fi
 
           if [ ! -d android ]; then
-            npm install @capacitor/core @capacitor/cli @capacitor/android
             npx cap add android
-          else
-            npm install @capacitor/android
           fi
 
           npx cap sync android
 
-      - name: Build APK
+      - name: Prepare Gradle
         run: |
           cd "$PROJECT_DIR/android"
 
           if [ ! -f gradlew ]; then
-            echo "ERROR: Gradle wrapper missing from Android project"
-            exit 1
+            gradle wrapper --gradle-version 8.13
           fi
 
           chmod +x gradlew
+
+      - name: Build APK
+        run: |
+          cd "$PROJECT_DIR/android"
           ./gradlew assembleDebug --no-daemon
 
-      - name: Upload APK
+      - name: Upload AAKNOVA APK
         uses: actions/upload-artifact@v4
         with:
           name: AAKNOVA-Android-APK
-          path: "extracted/**/android/app/build/outputs/apk/debug/*.apk"
+          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+          
           
           
           
