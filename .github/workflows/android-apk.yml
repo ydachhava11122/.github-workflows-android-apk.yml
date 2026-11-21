@@ -29,7 +29,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
 
       - name: Setup Android SDK
         run: |
@@ -38,21 +37,22 @@ jobs:
           echo "/usr/local/lib/android/sdk/platform-tools" >> $GITHUB_PATH
           echo "/usr/local/lib/android/sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
-      - name: Accept Android licenses and install SDK
+      - name: Accept licenses and install Android SDK
         run: |
-          yes | /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --licenses || true
-          /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          yes | sdkmanager --licenses || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Extract project ZIP
         run: |
           mkdir -p extracted
           ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
+
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Repository root mein project ZIP nahi mili."
+            echo "ERROR: Project ZIP nahi mili."
             exit 1
           fi
+
           unzip -q "$ZIP_FILE" -d extracted
-          echo "Extracted project files:"
           find extracted -maxdepth 3 -type f | head -100
 
       - name: Locate project folder
@@ -71,7 +71,7 @@ jobs:
           echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
           echo "Project found: $PROJECT_DIR"
 
-      - name: Fix esbuild and install dependencies
+      - name: Install dependencies
         run: |
           cd "$PROJECT_DIR"
           npm pkg set 'devDependencies.esbuild=^0.28.2'
@@ -112,7 +112,7 @@ jobs:
           cd "$PROJECT_DIR/android"
           ./gradlew assembleDebug --no-daemon
 
-      - name: Upload AAKNOVA APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: AAKNOVA-Android-APK
