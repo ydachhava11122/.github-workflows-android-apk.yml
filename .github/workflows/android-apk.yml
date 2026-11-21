@@ -1,211 +1,136 @@
-
-name: AAKNOVA - Complete Android APK Build
+name: Build AAKNOVA Android APK
 
 on:
   workflow_dispatch:
   push:
-    paths:
-      - '**.zip'
-      - '.github/workflows/android-apk.yml'
+    branches: [main, master]
+    tags: ['v*']
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NPM_CONFIG_LEGACY_PEER_DEPS: 'true'
 
 jobs:
-  build:
-    name: Build AAKNOVA Android APK
+  build-android-apk:
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: ''
+          node-version: '22'
 
-      - name: Setup Java 17
+      - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # Automatically accept Android SDK licenses.
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform and build-tools
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Setup Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
         with:
-          accept-android-sdk-licenses: true
-          log-accepted-android-sdk-licenses: false
-          packages: platform-tools
+          gradle-version: '8.7'
 
-      - name: Extract and Locate AAKNOVA Project
-        shell: bash
+      - name: Install dependencies
         run: |
-          set -euo pipefail
+          npm install --legacy-peer-deps --no-audit --no-fund --ignore-scripts
+          npm install --legacy-peer-deps --no-save --no-audit --no-fund --ignore-scripts \
+            @capacitor/core@^6.2.0 @capacitor/cli@^6.2.0 @capacitor/android@^6.2.0
 
-          mkdir -p extracted
-
-          if [ -f "package.json" ]; then
-            PROJECT="$GITHUB_WORKSPACE"
+      - name: Point app API calls to backend (optional)
+        env:
+          API_BASE_URL: ${{ vars.API_BASE_URL }}
+        run: |
+          if [ -n "$API_BASE_URL" ]; then
+            sed -i "s#const res = await fetch(url, {#const res = await fetch((import.meta.env.VITE_API_BASE_URL || '') + url, {#" src/lib/api.ts
+            grep -q "VITE_API_BASE_URL" src/lib/api.ts
+            echo "VITE_API_BASE_URL=${API_BASE_URL%/}" >> "$GITHUB_ENV"
           else
-            ZIP_FILE=$(find . -maxdepth 2 -type f \
-              -iname '*.zip' -not -path './.git/*' | head -n 1)
-
-            if [ -z "$ZIP_FILE" ]; then
-              echo "ERROR: No project ZIP or root package.json found."
-              exit 1
-            fi
-
-            echo "Extracting: $ZIP_FILE"
-            unzip -q "$ZIP_FILE" -d extracted
-
-            PACKAGE_FILE=$(find extracted -type f \
-              -name package.json \
-              -not -path '*/node_modules/*' | head -n 1)
-
-            if [ -z "$PACKAGE_FILE" ]; then
-              echo "ERROR: package.json not found in ZIP."
-              exit 1
-            fi
-
-            PROJECT="$(dirname "$PACKAGE_FILE")"
+            echo "API_BASE_URL not set - app relative /api paths use karega."
           fi
 
-          echo "PROJECT_DIR=$PROJECT" >> "$GITHUB_ENV"
-          echo "Project located: $PROJECT"
+      - name: Build web bundle
+        run: npm run build
 
-      - name: Install Project Dependencies
-        shell: bash
+      - name: Prepare Capacitor config
         run: |
-          set -euo pipefail
-          cd "$PROJECT_DIR"
+          npx tsx -e "import c from './capacitor.config.ts'; import fs from 'node:fs'; fs.writeFileSync('capacitor.config.json', JSON.stringify(c, null, 2));"
+          rm -f capacitor.config.ts
+          test -f dist/index.html
 
-          if [ -f package-lock.json ]; then
-            npm ci
+      - name: Sync web bundle into Android project
+        run: npx cap sync android
+
+      - name: Prepare signing key
+        env:
+          KS_B64: ${{ secrets.AAKNOVA_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.AAKNOVA_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.AAKNOVA_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.AAKNOVA_KEY_PASSWORD }}
+        run: |
+          cd android
+          if [ -n "$KS_B64" ] && [ -n "$KS_PASS" ] && [ -n "$KS_ALIAS" ]; then
+            echo "$KS_B64" | base64 -d > app/release.jks
+            : "${KEY_PASS:=$KS_PASS}"
+            echo "Using repository keystore."
           else
-            npm install
+            KS_PASS="$(openssl rand -hex 16)"
+            KEY_PASS="$KS_PASS"
+            KS_ALIAS="aaknova-ci"
+            keytool -genkeypair -keystore app/release.jks -alias "$KS_ALIAS" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$KS_PASS" -keypass "$KEY_PASS" \
+              -dname "CN=AAKNOVA, OU=CI, O=AAKNOVA, C=IN"
+            echo "No keystore secrets found - temporary CI keystore generated."
           fi
+          {
+            echo "storeFile=release.jks"
+            echo "storePassword=$KS_PASS"
+            echo "keyAlias=$KS_ALIAS"
+            echo "keyPassword=$KEY_PASS"
+          } > keystore.properties
 
-      - name: Verify Capacitor Dependencies
-        shell: bash
+      - name: Build signed release APK
+        working-directory: android
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Verify APK signature
         run: |
-          set -euo pipefail
-          cd "$PROJECT_DIR"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)"
+          "$APKSIGNER" verify --verbose android/app/build/outputs/apk/release/app-release.apk
 
-          if [ ! -f capacitor.config.ts ] && \
-             [ ! -f capacitor.config.js ] && \
-             [ ! -f capacitor.config.json ]; then
-            echo "ERROR: Capacitor configuration is missing."
-            exit 1
-          fi
-
-          CORE_VERSION=$(node -e "
-            const p=require('./package.json');
-            console.log(
-              p.dependencies?.['@capacitor/core'] ||
-              p.devDependencies?.['@capacitor/core'] || ''
-            );
-          ")
-
-          if [ -z "$CORE_VERSION" ]; then
-            echo "ERROR: @capacitor/core is missing."
-            exit 1
-          fi
-
-          CORE_MAJOR=$(echo "$CORE_VERSION" | grep -oE '[0-9]+' | head -n 1)
-
-          if [ -z "$CORE_MAJOR" ]; then
-            echo "ERROR: Cannot determine Capacitor version."
-            exit 1
-          fi
-
-          if ! npm ls @capacitor/android --depth=0 >/dev/null 2>&1; then
-            npm install "@capacitor/android@$CORE_MAJOR"
-          fi
-
-          if ! npm ls @capacitor/cli --depth=0 >/dev/null 2>&1; then
-            npm install --save-dev "@capacitor/cli@$CORE_MAJOR"
-          fi
-
-          echo "Capacitor dependency verification complete."
-
-      - name: Build Web Application
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$PROJECT_DIR"
-
-          npm run build
-
-          if [ ! -d dist ]; then
-            echo "ERROR: Vite dist folder was not generated."
-            exit 1
-          fi
-
-      - name: Prepare Android Project
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$PROJECT_DIR"
-
-          if [ ! -d android ]; then
-            npx cap add android
-          fi
-
-          if [ ! -f android/gradlew ]; then
-            echo "ERROR: Android Gradle wrapper is missing."
-            exit 1
-          fi
-
-          npx cap sync android
-
-      - name: Verify Android Build Environment
-        shell: bash
-        run: |
-          set -euo pipefail
-          java -version
-          node --version
-          npm --version
-          sdkmanager --version
-
-          cd "$PROJECT_DIR/android"
-          chmod +x gradlew
-          ./gradlew --version
-
-      - name: Build Debug APK
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$PROJECT_DIR/android"
-
-          ./gradlew \
-            --no-daemon \
-            --stacktrace \
-            assembleDebug
-
-          APK="app/build/outputs/apk/debug/app-debug.apk"
-
-          if [ ! -f "$APK" ]; then
-            echo "ERROR: APK file was not generated."
-            exit 1
-          fi
-
-          mkdir -p "$GITHUB_WORKSPACE/output"
-          cp "$APK" "$GITHUB_WORKSPACE/output/AAKNOVA.apk"
-
-          echo "AAKNOVA APK BUILD SUCCESSFUL"
-
-      - name: Upload AAKNOVA APK
+      - name: Upload APK (Artifacts)
         uses: actions/upload-artifact@v4
         with:
-          name: AAKNOVA-Android-APK
-          path: output/AAKNOVA.apk
+          name: aaknova-android-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
-          retention-days: 14
-          
+
+      - name: Publish APK to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-build-${{ github.run_number }}
+          name: AAKNOVA APK build ${{ github.run_number }}
+          files: android/app/build/outputs/apk/release/app-release.apk
+          prerelease: true
           
           
           
