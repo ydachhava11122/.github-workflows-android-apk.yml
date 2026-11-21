@@ -24,12 +24,10 @@ jobs:
       - name: Extract Project ZIP
         run: |
           ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
-
           if [ -z "$ZIP_FILE" ]; then
             echo "ZIP file not found!"
             exit 1
           fi
-
           mkdir extracted
           unzip -q "$ZIP_FILE" -d extracted
 
@@ -40,12 +38,10 @@ jobs:
             -not -path "*/node_modules/*" \
             -not -path "*/.git/*" \
             -printf '%h\n' | head -n 1)
-
           if [ -z "$PROJECT_DIR" ]; then
             echo "package.json not found!"
             exit 1
           fi
-
           echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
 
       - name: Install Dependencies
@@ -66,8 +62,8 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
-          with:
-            packages: ''
+        with:
+          packages: ''
 
       - name: Accept Android Licenses
         run: |
@@ -80,24 +76,18 @@ jobs:
       - name: Prepare Android
         run: |
           cd "$PROJECT_DIR"
-
           if [ ! -d android ]; then
             ./node_modules/.bin/cap add android
           fi
-
           ./node_modules/.bin/cap sync android
-
-          echo "Checking Android files:"
           ls -la android
 
       - name: Generate Gradle Wrapper
         run: |
           cd "$PROJECT_DIR/android"
-
           if [ ! -f gradlew ]; then
             gradle wrapper --gradle-version 8.13
           fi
-
           chmod +x gradlew
 
       - name: Build APK
@@ -111,7 +101,6 @@ jobs:
           name: AAKNOVA-APK
           path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          
           
           
           
