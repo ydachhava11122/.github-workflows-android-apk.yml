@@ -19,7 +19,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -33,15 +33,30 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Extract Project
+      - name: Accept Android SDK Licenses
         run: |
-          mkdir extracted
+          yes | sdkmanager --licenses || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Extract AAKNOVA Project
+        run: |
+          mkdir -p extracted
+
           ZIP=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
-          test -n "$ZIP" || { echo "ZIP not found"; exit 1; }
+
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: ZIP file not found"
+            exit 1
+          fi
+
           unzip -q "$ZIP" -d extracted
 
           PACKAGE=$(find extracted -name package.json -not -path "*/node_modules/*" | head -n 1)
-          test -n "$PACKAGE" || { echo "package.json not found"; exit 1; }
+
+          if [ -z "$PACKAGE" ]; then
+            echo "ERROR: package.json not found"
+            exit 1
+          fi
 
           echo "PROJECT_DIR=$(dirname "$PACKAGE")" >> "$GITHUB_ENV"
 
@@ -51,42 +66,48 @@ jobs:
           npm install --legacy-peer-deps
           npm install react-is --save --legacy-peer-deps
 
-      - name: Build Web App
+      - name: Build Web Application
         run: |
           cd "$PROJECT_DIR"
           npm run build
 
-      - name: Configure Capacitor
+      - name: Setup Capacitor
         run: |
           cd "$PROJECT_DIR"
-          npm install @capacitor/core @capacitor/cli @capacitor/android --save --legacy-peer-deps
+
+          npm install --save --legacy-peer-deps @capacitor/core @capacitor/cli @capacitor/android
 
           if [ ! -f capacitor.config.json ] && [ ! -f capacitor.config.ts ] && [ ! -f capacitor.config.js ]; then
             npx cap init AAKNOVA com.aaknova.app --web-dir=dist
           fi
 
-          npx cap add android
+          if [ ! -d android ]; then
+            npx cap add android
+          fi
 
           npx cap sync android
 
       - name: Build Android APK
         run: |
           cd "$PROJECT_DIR/android"
+
           if [ ! -f gradlew ]; then
             echo "ERROR: Gradle wrapper missing"
             ls -la
             exit 1
           fi
+
           chmod +x gradlew
           ./gradlew assembleDebug
 
-      - name: Upload APK
+      - name: Upload AAKNOVA APK
         uses: actions/upload-artifact@v4
         with:
           name: AAKNOVA-Android-APK
           path: "**/app/build/outputs/apk/debug/*.apk"
           if-no-files-found: error
           retention-days: 14
+          
           
           
           
