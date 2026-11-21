@@ -12,87 +12,84 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    env:
-      ANDROID_HOME: /usr/local/lib/android/sdk
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "21"
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: 22
+          cache: npm
 
-      - name: Extract ZIP
+      - name: Find and Extract ZIP
         run: |
-          ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
-          test -n "$ZIP_FILE"
-          mkdir -p extracted
-          unzip -o "$ZIP_FILE" -d extracted
+          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: Project ZIP file not found!"
+            exit 1
+          fi
+
+          mkdir extracted
+          unzip -q "$ZIP_FILE" -d extracted
+
+      - name: Locate Project
+        run: |
+          cd extracted
+
+          PROJECT_DIR=$(find . -name package.json \
+            -not -path "*/node_modules/*" \
+            -not -path "*/.git/*" \
+            -printf '%h\n' | head -n 1)
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: package.json not found!"
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=$GITHUB_WORKSPACE/extracted/$PROJECT_DIR" >> $GITHUB_ENV
 
       - name: Install Dependencies
         run: |
-          cd extracted
-          npm install --legacy-peer-deps
-          npm install react-is --save --legacy-peer-deps
+          cd "$PROJECT_DIR"
+          npm install
 
-      - name: Build Website
+      - name: Verify Capacitor
         run: |
-          cd extracted
+          cd "$PROJECT_DIR"
+          npm install @capacitor/core @capacitor/android
+          node -e "console.log(require('./node_modules/@capacitor/core/package.json').version)"
+
+      - name: Build Web App
+        run: |
+          cd "$PROJECT_DIR"
           npm run build
 
-      - name: Install Capacitor Android
-        run: |
-          cd extracted
-          npm install @capacitor/cli --save-dev --legacy-peer-deps
-          CAP_VERSION=$(node -p "require('./node_modules/@capacitor/core/package.json').version")
-          echo "Capacitor Core version: $CAP_VERSION"
-          npm install "@capacitor/android@$CAP_VERSION" --save --legacy-peer-deps
+      - name: Setup Android
+        uses: android-actions/setup-android@v3
 
-      - name: Sync Android
+      - name: Prepare Android Project
         run: |
-          cd extracted
-          npx --no-install cap sync android
+          cd "$PROJECT_DIR"
 
-      - name: Accept Android Licenses
-        run: |
-          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)
-          yes | "$SDKMANAGER" --licenses || true
+          if [ ! -d android ]; then
+            npx cap add android
+          fi
 
-      - name: Install Android SDK
-        run: |
-          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)
-          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.13"
-
-      - name: Generate Gradle Wrapper
-        run: |
-          cd extracted/android
-          gradle wrapper --gradle-version 8.13
-          chmod +x gradlew
+          npx cap sync android
 
       - name: Build APK
         run: |
-          cd extracted/android
-          ./gradlew assembleDebug --no-daemon
+          cd "$PROJECT_DIR/android"
+          chmod +x gradlew
+          ./gradlew assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: AAKNOVA-Android-APK
-          path: extracted/android/app/build/outputs/apk/debug/*.apk
+          name: AAKNOVA-APK
+          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           
           
