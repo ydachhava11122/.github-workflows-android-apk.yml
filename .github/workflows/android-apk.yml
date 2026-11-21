@@ -53,15 +53,10 @@ jobs:
           cd "$PROJECT_DIR"
           npm install --legacy-peer-deps
 
-      - name: Install Missing Dependencies
+      - name: Install Capacitor and React Dependencies
         run: |
           cd "$PROJECT_DIR"
-          npm install react-is --legacy-peer-deps
-          npm install @capacitor/core @capacitor/cli @capacitor/android --legacy-peer-deps
-
-      - name: Verify Capacitor
-        run: |
-          cd "$PROJECT_DIR"
+          npm install react-is @capacitor/core @capacitor/cli @capacitor/android --legacy-peer-deps
           ./node_modules/.bin/cap --version
 
       - name: Build Web App
@@ -71,6 +66,14 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+
+      - name: Accept Android Licenses
+        run: |
+          yes | sdkmanager --licenses || true
+
+      - name: Install Android Build Tools
+        run: |
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Prepare Android
         run: |
