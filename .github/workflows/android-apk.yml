@@ -30,6 +30,14 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Accept Android Licenses
+        run: |
+          yes | sdkmanager --licenses || true
+
+      - name: Install Android SDK Packages
+        run: |
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
       - name: Find ZIP File
         id: zip
         run: |
@@ -56,7 +64,7 @@ jobs:
           cd "$PROJECT_DIR"
           npm run build
 
-      - name: Install Capacitor Android
+      - name: Sync Capacitor
         run: |
           cd "$PROJECT_DIR"
           npm install @capacitor/android
