@@ -229,6 +229,16 @@ jobs:
           npx cap add android
 
           if [ -d android-uploaded/app/src/main ]; then
+            # Capacitor's fresh template may contain drawable/splash.png,
+            # while the supplied app contains drawable/splash.xml. Android
+            # treats both as the same drawable resource name and fails with
+            # "Duplicate resources". Prefer the supplied branded XML splash.
+            if [ -f android-uploaded/app/src/main/res/drawable/splash.xml ] \
+              && [ -f android/app/src/main/res/drawable/splash.png ]; then
+              rm -f android/app/src/main/res/drawable/splash.png
+              echo 'Removed generated splash.png; keeping supplied splash.xml.'
+            fi
+
             cp -a android-uploaded/app/src/main/. android/app/src/main/
           fi
 
