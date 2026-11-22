@@ -33,7 +33,6 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # SDK tools only. Licenses are accepted separately below.
       - name: Set up Android SDK command-line tools
         uses: android-actions/setup-android@v3
         with:
@@ -42,11 +41,10 @@ jobs:
           accept-android-sdk-licenses: false
           log-accepted-android-sdk-licenses: false
 
-      - name: Accept Android SDK licenses and install packages
+      - name: Accept Android SDK licenses and install required packages
         shell: bash
         run: |
           set -Eeuo pipefail
-
           echo "Android SDK: ${ANDROID_HOME:-${ANDROID_SDK_ROOT:-not-set}}"
           command -v sdkmanager
 
@@ -66,7 +64,7 @@ jobs:
           test -d "$SDK_ROOT/platforms/android-34"
           test -x "$SDK_ROOT/build-tools/34.0.0/apksigner"
 
-      - name: Find and extract AAKNOVA project ZIP
+      - name: Find and extract the AAKNOVA project ZIP
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -78,7 +76,7 @@ jobs:
           )
 
           if [ "${#ROOT_ZIPS[@]}" -ne 1 ]; then
-            echo "ERROR: Exactly one project ZIP is required."
+            echo "ERROR: Repository must contain exactly one top-level project ZIP."
             printf 'Found: %s\n' "${ROOT_ZIPS[@]}"
             exit 1
           fi
@@ -88,7 +86,6 @@ jobs:
           unzip -oq "${ROOT_ZIPS[0]}" -d extracted
 
           PROJECT_DIR=''
-
           for depth in 1 2 3; do
             mapfile -t PROJECTS < <(
               find extracted -type f -name package.json \
@@ -102,7 +99,7 @@ jobs:
             fi
 
             if [ "${#PROJECTS[@]}" -gt 1 ]; then
-              echo "ERROR: Multiple package.json files found."
+              echo "ERROR: More than one React project was found."
               printf '%s\n' "${PROJECTS[@]}"
               exit 1
             fi
@@ -113,7 +110,7 @@ jobs:
             )
 
             if [ "${#NESTED_ZIPS[@]}" -eq 0 ]; then
-              echo "ERROR: No project package.json or nested ZIP found."
+              echo "ERROR: No package.json or nested project ZIP found."
               find extracted -maxdepth 5 -type f | sort | head -200
               exit 1
             fi
@@ -126,7 +123,7 @@ jobs:
           done
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Could not locate AAKNOVA project."
+            echo "ERROR: Could not locate the AAKNOVA project."
             exit 1
           fi
 
@@ -137,7 +134,7 @@ jobs:
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "AAKNOVA project found: $PROJECT_DIR"
 
-      - name: Validate package and install dependencies
+      - name: Validate package manifest and install dependencies
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -149,7 +146,7 @@ jobs:
           const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
 
           if (!pkg.scripts?.build) {
-            throw new Error('Missing build script');
+            throw new Error('Missing scripts.build');
           }
 
           if (!pkg.dependencies?.react || !pkg.dependencies?.['react-dom']) {
@@ -163,13 +160,9 @@ jobs:
           console.log('Package validation passed');
           NODE
 
-          # Source ZIP contains bun.lock, not package-lock.json.
           npm install --no-audit --no-fund --legacy-peer-deps
 
-          npm install --save-exact \
-            --legacy-peer-deps \
-            --no-audit \
-            --no-fund \
+          npm install --save-exact --legacy-peer-deps --no-audit --no-fund \
             @capacitor/core@6.2.1 \
             @capacitor/cli@6.2.1 \
             @capacitor/android@6.2.1 \
@@ -185,9 +178,7 @@ jobs:
           java -version
 
           test "$(node -p "require('./$PROJECT_DIR/node_modules/@capacitor/core/package.json').version")" = '6.2.1'
-
           test "$(node -p "require('./$PROJECT_DIR/node_modules/@capacitor/cli/package.json').version")" = '6.2.1'
-
           test "$(node -p "require('./$PROJECT_DIR/node_modules/@capacitor/android/package.json').version")" = '6.2.1'
 
       - name: Configure Capacitor JSON
@@ -214,7 +205,6 @@ jobs:
           JSON
 
           node -e "JSON.parse(require('node:fs').readFileSync('capacitor.config.json','utf8'))"
-
           npx cap --version
 
       - name: Build web application
@@ -234,7 +224,6 @@ jobs:
           set -Eeuo pipefail
           cd "$PROJECT_DIR"
 
-          # Preserve uploaded Android app source/resources.
           if [ -d android ]; then
             rm -rf android-uploaded
             mv android android-uploaded
@@ -257,7 +246,7 @@ jobs:
 
           chmod +x android/gradlew
 
-      - name: Verify Android Gradle versions
+      - name: Verify Capacitor Android Gradle matrix
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -269,6 +258,7 @@ jobs:
 
           COMPILE_SDK="$(grep -Eo 'compileSdkVersion[[:space:]]*=[[:space:]]*[0-9]+' variables.gradle | head -n 1 | grep -Eo '[0-9]+$')"
 
+          echo "Capacitor: 6.2.1"
           echo "AGP: ${AGP_VERSION:-NOT FOUND}"
           echo "Gradle: ${GRADLE_URL:-NOT FOUND}"
           echo "Compile SDK: ${COMPILE_SDK:-NOT FOUND}"
@@ -277,9 +267,8 @@ jobs:
           [[ "$GRADLE_URL" == *'gradle-8.2.1-'* ]]
           test "$COMPILE_SDK" = '34'
 
-          grep -q 'VERSION_17' app/build.gradle
-
-          echo "Gradle compatibility checks passed"
+          echo "Gradle version checks passed."
+          echo "Java 17 will be checked against the actual Gradle runtime."
 
       - name: Verify Java and Gradle runtime
         shell: bash
@@ -303,8 +292,7 @@ jobs:
           APK='app/build/outputs/apk/debug/app-debug.apk'
           test -s "$APK"
 
-          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
-          "$SDK_ROOT/build-tools/34.0.0/apksigner" verify --verbose "$APK"
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose "$APK"
 
           mkdir -p "$GITHUB_WORKSPACE/output"
           cp "$APK" "$GITHUB_WORKSPACE/output/AAKNOVA.apk"
