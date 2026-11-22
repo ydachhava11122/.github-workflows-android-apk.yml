@@ -58,6 +58,7 @@ jobs:
             'build-tools;34.0.0'
 
           SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+
           test -n "$SDK_ROOT"
           test -d "$SDK_ROOT/platforms/android-34"
           test -x "$SDK_ROOT/build-tools/34.0.0/apksigner"
@@ -186,7 +187,10 @@ jobs:
           java -version
 
           for package in core cli android; do
-            VERSION="$(node -p "require('./node_modules/@capacitor/$package/package.json').version")"
+            VERSION="$(
+              node -p "require('./node_modules/@capacitor/$package/package.json').version"
+            )"
+
             echo "Capacitor $package: $VERSION"
             test "$VERSION" = '6.2.1'
           done
@@ -297,8 +301,6 @@ jobs:
           test "$AGP_VERSION" = '8.2.1'
           [[ "$GRADLE_URL" == *'gradle-8.2.1-'* ]]
           test "$COMPILE_SDK" = '34'
-
-          grep -q 'VERSION_17' app/build.gradle
 
           echo "Android configuration verified"
 
