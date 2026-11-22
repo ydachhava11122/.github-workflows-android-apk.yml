@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "*.zip"
+      - "**.zip"
       - ".github/workflows/android-apk.yml"
 
 permissions:
@@ -18,20 +18,24 @@ jobs:
     timeout-minutes: 60
 
     steps:
+      # 1. Download repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2. Setup Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
+      # 3. Setup Java
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
+      # 4. Find and extract project ZIP
       - name: Find and extract ZIP
         shell: bash
         run: |
@@ -42,13 +46,8 @@ jobs:
               ! -path './.git/*' | sort
           )
 
-          if [ "${#ZIP_FILES[@]}" -eq 0 ]; then
-            echo "ERROR: No ZIP file found."
-            exit 1
-          fi
-
           if [ "${#ZIP_FILES[@]}" -ne 1 ]; then
-            echo "ERROR: Multiple ZIP files found."
+            echo "ERROR: Expected exactly one ZIP file."
             printf '%s\n' "${ZIP_FILES[@]}"
             exit 1
           fi
@@ -63,30 +62,41 @@ jobs:
           )
 
           if [ "${#PROJECTS[@]}" -ne 1 ]; then
-            echo "ERROR: Expected one React project."
+            echo "ERROR: Expected exactly one React project."
             printf '%s\n' "${PROJECTS[@]}"
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "${PROJECTS[0]}")"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
           echo "Project found: $PROJECT_DIR"
 
+      # 5. Install Node dependencies
       - name: Install dependencies
         shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
 
-          npm install --legacy-peer-deps
+          npm install --no-audit --no-fund --legacy-peer-deps
 
-          npm install react-is --save --legacy-peer-deps
+          npm install react-is \
+            --save --legacy-peer-deps \
+            --no-audit --no-fund
 
-          npm install typescript@5.7.3 --save-dev --legacy-peer-deps
+          npm install typescript@5.7.3 \
+            --save-dev --legacy-peer-deps \
+            --no-audit --no-fund
 
-          npm install @capacitor/core @capacitor/cli @capacitor/android --legacy-peer-deps
+          npm install @capacitor/core \
+            @capacitor/cli \
+            @capacitor/android \
+            --legacy-peer-deps \
+            --no-audit --no-fund
 
+      # 6. Verify dependencies
       - name: Verify project dependencies
         shell: bash
         run: |
@@ -97,14 +107,18 @@ jobs:
             const p = require('./package.json');
 
             if (!p.scripts || !p.scripts.build) {
-              console.error('ERROR: Build script missing.');
+              console.error('Build script missing.');
               process.exit(1);
             }
           "
 
           npm ls react-is typescript
-          npm ls @capacitor/core @capacitor/cli @capacitor/android
 
+          npm ls @capacitor/core \
+            @capacitor/cli \
+            @capacitor/android
+
+      # 7. Build web application
       - name: Build React application
         shell: bash
         run: |
@@ -114,11 +128,12 @@ jobs:
           npm run build
 
           if [ ! -d dist ]; then
-            echo "ERROR: Vite dist folder not found."
+            echo "ERROR: Vite dist folder missing."
             exit 1
           fi
 
-      - name: Fix Capacitor configuration
+      # 8. Create Capacitor configuration
+      - name: Configure Capacitor
         shell: bash
         run: |
           set -euo pipefail
@@ -139,6 +154,31 @@ jobs:
 
           cat capacitor.config.json
 
+      # 9. Setup Android SDK without automatic license prompt
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          accept-android-sdk-licenses: false
+          log-accepted-android-sdk-licenses: false
+          packages: ''
+
+      # 10. Accept SDK licenses manually
+      - name: Accept Android SDK licenses
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDKMANAGER="$(command -v sdkmanager)"
+
+          echo "Using SDK manager: $SDKMANAGER"
+
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses
+          set -o pipefail
+
+          echo "SDK licenses accepted."
+
+      # 11. Prepare Android platform
       - name: Prepare Android platform
         shell: bash
         run: |
@@ -149,7 +189,7 @@ jobs:
             [ ! -f android/gradlew ] ||
             [ ! -f android/gradle/wrapper/gradle-wrapper.jar ];
           }; then
-            echo "Incomplete Android wrapper. Regenerating platform."
+            echo "Incomplete Android platform. Regenerating."
             rm -rf android
           fi
 
@@ -159,47 +199,57 @@ jobs:
 
           npx cap sync android
 
-          test -d android
+          test -f android/gradlew
+          test -f android/gradle/wrapper/gradle-wrapper.jar
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept Android SDK licenses
-        shell: bash
-        run: |
-          yes | sdkmanager --licenses || true
-
-      - name: Install Android SDK
+      # 12. Install exact Android SDK versions
+      - name: Install Android SDK packages
         shell: bash
         run: |
           set -euo pipefail
+          cd "$PROJECT_DIR"
+
+          VARIABLES="android/variables.gradle"
+
+          COMPILE_SDK="$(
+            grep -Eo 'compileSdkVersion[[:space:]]*=[[:space:]]*[0-9]+' \
+              "$VARIABLES" | head -n 1 | grep -Eo '[0-9]+$' || true
+          )"
+
+          BUILD_TOOLS="$(
+            grep -Eo "buildToolsVersion[[:space:]]*=[[:space:]]*['\"][^'\"]+['\"]" \
+              "$VARIABLES" | head -n 1 |
+              sed -E "s/.*=['\"]([^'\"]+)['\"].*/\1/" || true
+          )"
+
+          COMPILE_SDK="${COMPILE_SDK:-35}"
+          BUILD_TOOLS="${BUILD_TOOLS:-35.0.0}"
+
+          echo "Compile SDK: $COMPILE_SDK"
+          echo "Build Tools: $BUILD_TOOLS"
 
           sdkmanager --install \
             "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+            "platforms;android-${COMPILE_SDK}" \
+            "build-tools;${BUILD_TOOLS}"
 
+      # 13. Check Gradle wrapper
       - name: Check Gradle Wrapper
         shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR/android"
 
-          if [ ! -f gradlew ]; then
-            echo "ERROR: Gradle wrapper missing."
-            exit 1
-          fi
-
-          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
-            echo "ERROR: Gradle wrapper JAR missing."
-            exit 1
-          fi
+          test -f gradlew
+          test -f gradle/wrapper/gradle-wrapper.jar
 
           chmod +x gradlew
 
           java -version
+
           ./gradlew --version
 
+      # 14. Build APK
       - name: Build Android APK
         shell: bash
         run: |
@@ -211,6 +261,7 @@ jobs:
             --stacktrace \
             assembleDebug
 
+      # 15. Verify APK
       - name: Verify APK
         shell: bash
         run: |
@@ -218,23 +269,21 @@ jobs:
 
           APK="$PROJECT_DIR/android/app/build/outputs/apk/debug/app-debug.apk"
 
-          if [ ! -f "$APK" ]; then
-            echo "ERROR: APK not found."
+          if [ ! -s "$APK" ]; then
+            echo "ERROR: APK not generated."
             find "$PROJECT_DIR/android" -type f -name '*.apk'
             exit 1
           fi
 
-          if [ ! -s "$APK" ]; then
-            echo "ERROR: APK is empty."
-            exit 1
-          fi
-
           mkdir -p output
+
           cp "$APK" output/AAKNOVA.apk
 
           echo "APK successfully created."
+
           ls -lh output/AAKNOVA.apk
 
+      # 16. Upload APK
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
@@ -242,12 +291,4 @@ jobs:
           path: output/AAKNOVA.apk
           if-no-files-found: error
           retention-days: 7
-
-
-
-
-
-
-
-
           
