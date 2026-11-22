@@ -142,7 +142,7 @@ jobs:
           import fs from 'node:fs';
           const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
           if (!pkg.scripts?.build) throw new Error('package.json is missing scripts.build');
-          if (!pkg.dependencies?.react || !pkg.dependencies?.react-dom) {
+          if (!pkg.dependencies?.react || !pkg.dependencies?.['react-dom']) {
             throw new Error('React or React DOM dependency is missing');
           }
           if (!pkg.dependencies?.vite || !pkg.dependencies?.['@vitejs/plugin-react']) {
