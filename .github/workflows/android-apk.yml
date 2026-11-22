@@ -67,17 +67,7 @@ jobs:
             fi
           done
 
-          if [ -f package-lock.json ]; then
-            echo "[INFO] package-lock.json found"
-          else
-            echo "[INFO] No lock file; npm install will be used"
-          fi
-
-          if [ -f android/gradlew ]; then
-            echo "[INFO] Gradle wrapper found"
-          else
-            echo "[INFO] Gradle wrapper will be generated"
-          fi
+          echo "[PASS] Project structure checked"
 
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
@@ -104,18 +94,33 @@ jobs:
           npm --version
           sdkmanager --version
 
-      - name: Install Project Dependencies
+      - name: Install Project Dependencies and Fix Vite
         shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
 
+          echo "Checking package.json..."
+
+          node -e "
+            const fs = require('fs');
+            const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            p.devDependencies = p.devDependencies || {};
+            p.devDependencies.esbuild = '^0.28.2';
+            fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
+          "
+
+          echo "Installing dependencies..."
           npm install --no-audit --no-fund
 
+          echo "Installing Capacitor 6..."
           npm install --no-save --no-audit --no-fund \
             @capacitor/core@^6 \
             @capacitor/cli@^6 \
             @capacitor/android@^6
+
+          echo "Checking Vite and esbuild..."
+          npm ls vite esbuild @capacitor/core @capacitor/android
 
       - name: Validate Capacitor
         shell: bash
@@ -135,7 +140,7 @@ jobs:
           npm run build
 
           test -s dist/index.html
-          echo "[PASS] Vite production build completed"
+          echo "[PASS] Web application built successfully"
 
       - name: Sync Capacitor Android
         shell: bash
@@ -148,7 +153,7 @@ jobs:
           test -f android/capacitor.settings.gradle
           test -f android/capacitor.build.gradle
 
-          echo "[PASS] Capacitor Android sync completed"
+          echo "[PASS] Android sync completed"
 
       - name: Setup Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
@@ -168,6 +173,7 @@ jobs:
           fi
 
           chmod +x gradlew
+
           test -f gradle/wrapper/gradle-wrapper.properties
 
           echo "[PASS] Gradle wrapper ready"
@@ -218,7 +224,8 @@ jobs:
         if: always()
         run: |
           echo "AAKNOVA BUILD WORKFLOW FINISHED"
-          echo "Check the previous steps for PASS or FAIL."
+          echo "Check previous steps for PASS or FAIL."
+          
           
           
           
