@@ -33,10 +33,16 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # FIXED: Android SDK setup and automatic license acceptance
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          cmdline-tools-version: '15859902'
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
+          packages: ''
 
-      - name: Accept Android SDK licenses and install packages
+      - name: Install Android SDK packages
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -44,17 +50,17 @@ jobs:
           SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
           test -n "$SDK_ROOT"
 
-          set +o pipefail
-          yes | sdkmanager --licenses
-          set -o pipefail
-
           sdkmanager \
             "platform-tools" \
             "platforms;android-34" \
             "build-tools;34.0.0"
 
+          sdkmanager --list_installed
+
           test -d "$SDK_ROOT/platforms/android-34"
           test -x "$SDK_ROOT/build-tools/34.0.0/apksigner"
+
+          echo "Android SDK installation successful"
 
       - name: Find and extract AAKNOVA project ZIP
         shell: bash
@@ -170,7 +176,7 @@ jobs:
             @capacitor/cli@6.2.1 \
             @capacitor/android@6.2.1
 
-      - name: Verify Node and Java
+      - name: Verify toolchain versions
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -234,9 +240,8 @@ jobs:
           set -Eeuo pipefail
           cd "$PROJECT_DIR"
 
-          rm -rf android-uploaded
-
           if [ -d android ]; then
+            rm -rf android-uploaded
             mv android android-uploaded
           fi
 
@@ -249,7 +254,7 @@ jobs:
 
           chmod +x android/gradlew
 
-      - name: Enforce correct AAKNOVA Package ID
+      - name: Set correct AAKNOVA Package ID
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -299,9 +304,6 @@ jobs:
 
           console.log('Package ID successfully configured');
           NODE
-
-          grep -n "namespace" app/build.gradle
-          grep -n "applicationId" app/build.gradle
 
       - name: Sync Capacitor Android
         shell: bash
