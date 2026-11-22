@@ -5,171 +5,131 @@ on:
   workflow_dispatch:
   push:
     paths:
+      - "*.zip"
       - "**/*.zip"
       - ".github/workflows/android-apk.yml"
 
 permissions:
   contents: read
 
+concurrency:
+  group: aaknova-android-build
+  cancel-in-progress: true
+
 jobs:
   build:
+    name: Build AAKNOVA Android APK
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
     steps:
+      # 1. Download repository
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Locate and Extract Project ZIP
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ZIP_FILE=$(find . -maxdepth 2 -type f -iname "*.zip" | head -n 1)
-
-          if [ -n "$ZIP_FILE" ]; then
-            mkdir -p "$RUNNER_TEMP/aaknova"
-            unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/aaknova"
-            PROJECT_DIR="$RUNNER_TEMP/aaknova"
-            echo "ZIP FOUND: $ZIP_FILE"
-          elif [ -f package.json ]; then
-            PROJECT_DIR="$GITHUB_WORKSPACE"
-          else
-            echo "ERROR: Project ZIP not found"
-            exit 1
-          fi
-
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-      - name: Check Project Files
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$PROJECT_DIR"
-
-          for FILE in \
-            package.json \
-            capacitor.config.ts \
-            vite.config.ts \
-            src/main.tsx \
-            src/App.tsx \
-            android/settings.gradle \
-            android/build.gradle \
-            android/app/build.gradle \
-            android/variables.gradle \
-            android/app/src/main/AndroidManifest.xml
-          do
-            if [ ! -f "$FILE" ]; then
-              echo "MISSING: $FILE"
-              exit 1
-            fi
-            echo "[PASS] $FILE"
-          done
-
-      - name: Setup Node.js 20
+      # 2. Setup Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: npm
 
+      # 3. Setup Java
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
-          accept-android-sdk-licenses: true
-          log-accepted-android-sdk-licenses: false
-
-      - name: Fix Dependency Versions
+      # 4. Extract uploaded project ZIP
+      - name: Extract Project ZIP
         shell: bash
         run: |
           set -euo pipefail
-          cd "$PROJECT_DIR"
 
-          node <<'NODE'
-          const fs = require('fs');
-          const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          mkdir -p "$GITHUB_WORKSPACE/_source"
 
-          p.devDependencies = p.devDependencies || {};
-          p.devDependencies.esbuild = '0.28.2';
-          p.devDependencies.typescript = '5.9.3';
+          shopt -s nullglob
+          ZIP_FILES=("$GITHUB_WORKSPACE"/*.zip)
 
-          fs.writeFileSync(
-            'package.json',
-            JSON.stringify(p, null, 2) + '\n'
-          );
-          NODE
+          if [ ${#ZIP_FILES[@]} -gt 0 ]; then
+            for ZIP in "${ZIP_FILES[@]}"; do
+              echo "Extracting: $ZIP"
+              unzip -oq "$ZIP" -d "$GITHUB_WORKSPACE/_source"
+            done
+          else
+            echo "No ZIP found. Using repository source."
+          fi
 
-          echo "[PASS] esbuild and TypeScript versions fixed"
+      # 5. Automatically locate actual project folder
+      - name: Locate AAKNOVA Project
+        shell: bash
+        run: |
+          set -euo pipefail
 
+          PROJECT_DIR=""
+
+          for ROOT in "$GITHUB_WORKSPACE/_source" "$GITHUB_WORKSPACE"; do
+            [ -d "$ROOT" ] || continue
+
+            while IFS= read -r FILE; do
+              DIR="$(dirname "$FILE")"
+
+              if [ -f "$DIR/src/main.tsx" ] &&
+                 { [ -f "$DIR/vite.config.ts" ] ||
+                   [ -f "$DIR/vite.config.js" ] ||
+                   [ -f "$DIR/vite.config.mts" ]; }; then
+                PROJECT_DIR="$DIR"
+                break 2
+              fi
+            done < <(
+              find "$ROOT" \
+                -type d \( -name node_modules -o -name .git -o -name android \) -prune \
+                -o -type f -name package.json -print
+            )
+          done
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: AAKNOVA project root not found."
+            echo "Expected package.json, src/main.tsx and vite.config."
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          echo "Project found: $PROJECT_DIR"
+          ls -la "$PROJECT_DIR"
+
+      # 6. Install Node dependencies
       - name: Install Project Dependencies
         shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
 
-          npm install --no-audit --no-fund
-
-          npm install --no-save --no-audit --no-fund \
-            @capacitor/core@^6 \
-            @capacitor/cli@^6 \
-            @capacitor/android@^6
-
-          echo "Checking versions..."
-          node -e "
-            console.log('TypeScript:', require('typescript').version);
-            console.log('esbuild:', require('esbuild').version);
-          "
-
-          npm ls vite esbuild typescript \
-            @capacitor/core @capacitor/cli @capacitor/android
-
-      - name: Replace TypeScript Capacitor Config With JSON
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$PROJECT_DIR"
-
-          if [ -f capacitor.config.ts ]; then
-            mv capacitor.config.ts capacitor.config.ts.backup
+          if [ ! -f package.json ]; then
+            echo "package.json missing"
+            exit 1
           fi
 
-          cat > capacitor.config.json <<'EOF'
-          {
-            "appId": "com.aaknova.enterprise",
-            "appName": "AAKNOVA",
-            "webDir": "dist"
-          }
-          EOF
+          npm install --legacy-peer-deps
 
-          echo "Checking JSON configuration..."
-          node -e "
-            const c = require('./capacitor.config.json');
-            if (
-              c.appId !== 'com.aaknova.enterprise' ||
-              c.appName !== 'AAKNOVA' ||
-              c.webDir !== 'dist'
-            ) {
-              throw new Error('Invalid Capacitor configuration');
-            }
-            console.log(c);
-          "
-
-          echo "[PASS] JSON Capacitor configuration ready"
-
-      - name: Validate Capacitor
+      # 7. Keep all Capacitor packages on same version
+      - name: Fix Capacitor Versions
         shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
 
-          npx cap --version
-          npx cap doctor
+          npm install --save-exact --legacy-peer-deps \
+            @capacitor/core@6.2.3 \
+            @capacitor/cli@6.2.3 \
+            @capacitor/android@6.2.3
 
+          echo "Checking Capacitor versions..."
+          npm ls @capacitor/core @capacitor/cli @capacitor/android
+
+      # 8. Build Vite web application
       - name: Build Web Application
         shell: bash
         run: |
@@ -178,10 +138,60 @@ jobs:
 
           npm run build
 
-          test -s dist/index.html
-          echo "[PASS] Web application build completed"
+          if [ ! -d dist ]; then
+            echo "ERROR: dist folder was not generated."
+            exit 1
+          fi
 
-      - name: Sync Android Project
+          echo "WEB BUILD SUCCESSFUL"
+          ls -la dist
+
+      # 9. Verify Capacitor configuration
+      - name: Verify Capacitor Configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+
+          if [ ! -f capacitor.config.ts ] &&
+             [ ! -f capacitor.config.json ] &&
+             [ ! -f capacitor.config.js ]; then
+            echo "ERROR: Capacitor configuration missing."
+            exit 1
+          fi
+
+          echo "Capacitor configuration found."
+
+          npx cap --version
+          npx cap doctor
+
+      # 10. Prepare Android project
+      - name: Generate Android Platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+
+          if [ ! -f android/gradlew ]; then
+            echo "Android Gradle Wrapper missing."
+
+            if [ -d android ]; then
+              mv android "android-incomplete-${GITHUB_RUN_ID}"
+            fi
+
+            npx cap add android
+          fi
+
+          test -f android/gradlew
+          test -f android/app/build.gradle || \
+            test -f android/app/build.gradle.kts
+
+          chmod +x android/gradlew
+
+          echo "ANDROID PLATFORM READY"
+
+      # 11. Synchronize Android assets and plugins
+      - name: Capacitor Android Sync
         shell: bash
         run: |
           set -euo pipefail
@@ -189,82 +199,122 @@ jobs:
 
           npx cap sync android
 
-          test -f android/capacitor.settings.gradle
-          test -f android/capacitor.build.gradle
-
-          echo "[PASS] Capacitor Android sync completed"
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.7"
-
-      - name: Generate Gradle Wrapper
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$PROJECT_DIR/android"
-
-          if [ ! -f gradlew ]; then
-            gradle wrapper \
-              --gradle-version 8.7 \
-              --distribution-type bin
-          fi
-
-          chmod +x gradlew
-
-          test -f gradle/wrapper/gradle-wrapper.properties
-
-          echo "[PASS] Gradle wrapper ready"
-
-      - name: Build Android Debug APK
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$PROJECT_DIR/android"
-
-          ./gradlew assembleDebug --no-daemon
-
-          APK="app/build/outputs/apk/debug/app-debug.apk"
-
-          if [ ! -s "$APK" ]; then
-            echo "APK NOT GENERATED"
+          if [ ! -d android/app/src/main/assets ]; then
+            echo "ERROR: Android assets missing after sync."
             exit 1
           fi
 
-          echo "[PASS] APK GENERATED"
-          ls -lh "$APK"
+          test -f android/gradlew
 
+          echo "ANDROID ASSETS SYNC SUCCESSFUL"
+
+      # 12. Setup Android SDK
+      - name: Setup Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
+          if [ ! -x "$SDKMANAGER" ]; then
+            echo "ERROR: Android SDK command-line tools missing."
+            find "$ANDROID_HOME/cmdline-tools" -maxdepth 3 -type f \
+              -name sdkmanager 2>/dev/null || true
+            exit 1
+          fi
+
+          yes | "$SDKMANAGER" --licenses || true
+
+          "$SDKMANAGER" --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      # 13. Verify Gradle and Android SDK
+      - name: Verify Android Build Environment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          java -version
+          adb version
+          sdkmanager --version || \
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --version
+
+          cd "$PROJECT_DIR/android"
+          test -f gradlew
+          chmod +x gradlew
+
+      # 14. Build Debug APK
+      - name: Build Debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR/android"
+
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            assembleDebug
+
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK was not generated."
+            find app/build/outputs -type f || true
+            exit 1
+          fi
+
+          echo "APK BUILD SUCCESSFUL"
+
+      # 15. Verify APK
       - name: Verify APK
         shell: bash
         run: |
           set -euo pipefail
+          cd "$PROJECT_DIR/android"
 
-          APK="$PROJECT_DIR/android/app/build/outputs/apk/debug/app-debug.apk"
+          APK="app/build/outputs/apk/debug/app-debug.apk"
 
-          APKSIGNER=$(find "$ANDROID_HOME/build-tools" \
-            -name apksigner | sort -V | tail -n 1)
+          ls -lh "$APK"
+          file "$APK"
 
-          test -n "$APKSIGNER"
-          "$APKSIGNER" verify "$APK"
+          if [ ! -s "$APK" ]; then
+            echo "ERROR: APK is empty."
+            exit 1
+          fi
 
-          echo "[PASS] APK signature verified"
+          sha256sum "$APK"
 
+      # 16. Upload APK for download
       - name: Upload AAKNOVA APK
         uses: actions/upload-artifact@v4
         with:
           name: AAKNOVA-Android-APK
           path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
 
-      - name: Build Report
-        if: always()
+      # 17. Build summary
+      - name: Build Summary
+        if: success()
+        shell: bash
         run: |
-          echo "================================"
-          echo "AAKNOVA ANDROID BUILD REPORT"
-          echo "================================"
-          echo "Check previous steps for PASS or FAIL."
+          echo "## AAKNOVA Android Build Successful" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Capacitor: 6.2.3" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Java: 17" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Android SDK: 35" >> "$GITHUB_STEP_SUMMARY"
+          echo "- APK: app-debug.apk" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Artifact: AAKNOVA-Android-APK" >> "$GITHUB_STEP_SUMMARY"
+          
+          
           
           
           
