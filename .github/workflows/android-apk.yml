@@ -1,3 +1,4 @@
+
 name: AAKNOVA Android APK Build
 
 on:
@@ -26,16 +27,13 @@ jobs:
         with:
           node-version: '22'
 
-      # Capacitor 6 / Android Gradle Plugin 8.2.1 requires JDK 17.
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # Install command-line tools only. License acceptance is handled in the
-      # next step so sdkmanager never waits for interactive input inside this action.
-      - name: Set up pinned Android SDK command-line tools 22.0
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v4.0.4
         with:
           cmdline-tools-version: '15859902'
@@ -43,27 +41,28 @@ jobs:
           accept-android-sdk-licenses: false
           log-accepted-android-sdk-licenses: false
 
-      - name: Accept Android SDK licenses and install required packages
+      - name: Accept licenses and install Android packages
         shell: bash
         run: |
           set -Eeuo pipefail
-          echo "Android SDK: ${ANDROID_HOME:-${ANDROID_SDK_ROOT:-not-set}}"
+
           command -v sdkmanager
-          # Feed every license prompt a 'yes' without requiring a person at the terminal.
+
           set +o pipefail
           yes | sdkmanager --licenses
           set -o pipefail
+
           sdkmanager \
             'platform-tools' \
             'platforms;android-34' \
             'build-tools;34.0.0'
-          sdkmanager --list_installed
+
           SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
           test -n "$SDK_ROOT"
           test -d "$SDK_ROOT/platforms/android-34"
           test -x "$SDK_ROOT/build-tools/34.0.0/apksigner"
 
-      - name: Find and extract the AAKNOVA project ZIP
+      - name: Find and extract AAKNOVA project ZIP
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -75,16 +74,18 @@ jobs:
           )
 
           if [ "${#ROOT_ZIPS[@]}" -ne 1 ]; then
-            echo "ERROR: Repository must contain exactly one top-level project ZIP."
-            printf 'Found: %s\n' "${ROOT_ZIPS[@]}"
+            echo "ERROR: Exactly one project ZIP is required."
+            printf '%s\n' "${ROOT_ZIPS[@]}"
             exit 1
           fi
 
           rm -rf extracted
           mkdir -p extracted
+
           unzip -oq "${ROOT_ZIPS[0]}" -d extracted
 
           PROJECT_DIR=''
+
           for depth in 1 2 3; do
             mapfile -t PROJECTS < <(
               find extracted -type f -name package.json \
@@ -98,7 +99,7 @@ jobs:
             fi
 
             if [ "${#PROJECTS[@]}" -gt 1 ]; then
-              echo "ERROR: More than one React project was found in the ZIP files."
+              echo "ERROR: Multiple projects found."
               printf '%s\n' "${PROJECTS[@]}"
               exit 1
             fi
@@ -109,7 +110,7 @@ jobs:
             )
 
             if [ "${#NESTED_ZIPS[@]}" -eq 0 ]; then
-              echo "ERROR: No package.json or nested project ZIP was found."
+              echo "ERROR: Project ZIP not found."
               find extracted -maxdepth 5 -type f | sort | head -200
               exit 1
             fi
@@ -122,17 +123,18 @@ jobs:
           done
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Could not locate the AAKNOVA project after extracting nested ZIP files."
+            echo "ERROR: AAKNOVA project root not found."
             exit 1
           fi
 
           test -s "$PROJECT_DIR/package.json"
           test -s "$PROJECT_DIR/vite.config.ts"
           test -s "$PROJECT_DIR/src/main.tsx"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "AAKNOVA project found: $PROJECT_DIR"
 
-      - name: Validate package manifest and install dependencies
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project found: $PROJECT_DIR"
+
+      - name: Validate and install dependencies
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -140,66 +142,84 @@ jobs:
 
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-          if (!pkg.scripts?.build) throw new Error('package.json is missing scripts.build');
-          if (!pkg.dependencies?.react || !pkg.dependencies?.['react-dom']) {
-            throw new Error('React or React DOM dependency is missing');
+
+          const pkg = JSON.parse(
+            fs.readFileSync('package.json', 'utf8')
+          );
+
+          if (!pkg.scripts?.build) {
+            throw new Error('Missing build script');
           }
-          if (!pkg.dependencies?.vite || !pkg.dependencies?.['@vitejs/plugin-react']) {
-            throw new Error('Vite or @vitejs/plugin-react dependency is missing');
+
+          if (!pkg.dependencies?.react ||
+              !pkg.dependencies?.['react-dom']) {
+            throw new Error('React dependencies missing');
           }
-          console.log('package.json validation passed');
+
+          if (!pkg.dependencies?.vite ||
+              !pkg.dependencies?.['@vitejs/plugin-react']) {
+            throw new Error('Vite dependencies missing');
+          }
+
+          console.log('Project validation passed');
           NODE
 
-          # This source archive has bun.lock but no package-lock.json.
-          # npm install (not npm ci) is therefore intentional.
           npm install --no-audit --no-fund --legacy-peer-deps
 
-          # Pin all Capacitor packages to the same 6.2.1 release and install
-          # Recharts' React 19-compatible peer dependency explicitly.
-          npm install --save-exact --legacy-peer-deps --no-audit --no-fund \
+          npm install --save-exact \
+            --legacy-peer-deps \
+            --no-audit \
+            --no-fund \
             @capacitor/core@6.2.1 \
             @capacitor/cli@6.2.1 \
             @capacitor/android@6.2.1 \
             react-is@19.3.1
 
-      - name: Verify toolchain versions
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          node --version
-          npm --version
-          java -version
-          node -e "const p=require('./$PROJECT_DIR/package.json'); for (const n of ['@capacitor/core','@capacitor/cli','@capacitor/android']) console.log(n + ': ' + p.dependencies[n]);"
-          test "$(node -p "require('./$PROJECT_DIR/node_modules/@capacitor/core/package.json').version")" = '6.2.1'
-          test "$(node -p "require('./$PROJECT_DIR/node_modules/@capacitor/cli/package.json').version")" = '6.2.1'
-          test "$(node -p "require('./$PROJECT_DIR/node_modules/@capacitor/android/package.json').version")" = '6.2.1'
-
-      - name: Configure Capacitor without TypeScript config parsing
+      - name: Verify Capacitor versions
         shell: bash
         run: |
           set -Eeuo pipefail
           cd "$PROJECT_DIR"
 
-          # The supplied capacitor.config.ts caused a TypeScript loader error in CI.
-          # Keep a backup in the extracted workspace and use a plain JSON config.
+          node --version
+          npm --version
+          java -version
+
+          for package in core cli android; do
+            VERSION="$(node -p "require('./node_modules/@capacitor/$package/package.json').version")"
+            echo "Capacitor $package: $VERSION"
+            test "$VERSION" = '6.2.1'
+          done
+
+      - name: Configure Capacitor
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd "$PROJECT_DIR"
+
           if [ -f capacitor.config.ts ]; then
             mv capacitor.config.ts capacitor.config.ts.source-backup
           fi
-          rm -f capacitor.config.js capacitor.config.mjs capacitor.config.cjs
+
+          rm -f capacitor.config.js \
+            capacitor.config.mjs \
+            capacitor.config.cjs
 
           cat > capacitor.config.json <<'JSON'
           {
             "appId": "com.aaknova.enterprise",
             "appName": "AAKNOVA",
             "webDir": "dist",
+            "bundledWebRuntime": false,
             "server": {
-              "androidScheme": "https"
+              "androidScheme": "https",
+              "cleartext": false
             }
           }
           JSON
 
-          node -e "JSON.parse(require('node:fs').readFileSync('capacitor.config.json','utf8')); console.log('Capacitor JSON config is valid');"
+          node -e "JSON.parse(require('node:fs').readFileSync('capacitor.config.json','utf8'))"
+
           npx cap --version
 
       - name: Build web application
@@ -207,20 +227,19 @@ jobs:
         run: |
           set -Eeuo pipefail
           cd "$PROJECT_DIR"
-          npm run build
-          test -s dist/index.html
-          echo "Web build output verified: dist/index.html"
 
-      - name: Generate a clean Capacitor Android project and restore app resources
+          npm run build
+
+          test -s dist/index.html
+
+          echo "Web build successful"
+
+      - name: Generate clean Android project
         shell: bash
         run: |
           set -Eeuo pipefail
           cd "$PROJECT_DIR"
 
-          # The uploaded android/ directory is incomplete: it has no Gradle
-          # wrapper, wrapper JAR, or Capacitor-generated Gradle settings files.
-          # Preserve its app source/resources, but regenerate all Gradle files
-          # from the pinned Capacitor 6.2.1 template.
           if [ -d android ]; then
             rm -rf android-uploaded
             mv android android-uploaded
@@ -229,14 +248,11 @@ jobs:
           npx cap add android
 
           if [ -d android-uploaded/app/src/main ]; then
-            # Capacitor's fresh template may contain drawable/splash.png,
-            # while the supplied app contains drawable/splash.xml. Android
-            # treats both as the same drawable resource name and fails with
-            # "Duplicate resources". Prefer the supplied branded XML splash.
+
             if [ -f android-uploaded/app/src/main/res/drawable/splash.xml ] \
               && [ -f android/app/src/main/res/drawable/splash.png ]; then
+
               rm -f android/app/src/main/res/drawable/splash.png
-              echo 'Removed generated splash.png; keeping supplied splash.xml.'
             fi
 
             cp -a android-uploaded/app/src/main/. android/app/src/main/
@@ -250,52 +266,74 @@ jobs:
           test -s android/capacitor.settings.gradle
           test -s android/app/capacitor.build.gradle
           test -s android/app/src/main/AndroidManifest.xml
+
           chmod +x android/gradlew
 
-      - name: Verify Capacitor Android Gradle matrix
+      - name: Verify Android build configuration
         shell: bash
         run: |
           set -Eeuo pipefail
           cd "$PROJECT_DIR/android"
 
-          AGP_VERSION="$(grep -Eo 'com\.android\.tools\.build:gradle:[0-9.]+' build.gradle | head -n 1 | awk -F: '{print $3}')"
-          GRADLE_URL="$(grep '^distributionUrl=' gradle/wrapper/gradle-wrapper.properties | cut -d= -f2-)"
-          COMPILE_SDK="$(grep -Eo 'compileSdkVersion[[:space:]]*=[[:space:]]*[0-9]+' variables.gradle | head -n 1 | grep -Eo '[0-9]+$')"
+          AGP_VERSION="$(
+            grep -Eo 'com\.android\.tools\.build:gradle:[0-9.]+' \
+              build.gradle | head -n 1 | awk -F: '{print $3}'
+          )"
 
-          echo "Capacitor: 6.2.1"
-          echo "Android Gradle Plugin: ${AGP_VERSION:-NOT FOUND}"
-          echo "Gradle distribution: ${GRADLE_URL:-NOT FOUND}"
-          echo "Compile SDK: ${COMPILE_SDK:-NOT FOUND}"
+          GRADLE_URL="$(
+            grep '^distributionUrl=' \
+              gradle/wrapper/gradle-wrapper.properties | cut -d= -f2-
+          )"
+
+          COMPILE_SDK="$(
+            grep -Eo 'compileSdkVersion[[:space:]]*=[[:space:]]*[0-9]+' \
+              variables.gradle | head -n 1 | grep -Eo '[0-9]+$'
+          )"
+
+          echo "AGP: $AGP_VERSION"
+          echo "Gradle: $GRADLE_URL"
+          echo "Compile SDK: $COMPILE_SDK"
 
           test "$AGP_VERSION" = '8.2.1'
           [[ "$GRADLE_URL" == *'gradle-8.2.1-'* ]]
           test "$COMPILE_SDK" = '34'
-          echo 'AGP 8.2.1 / Gradle 8.2.1 / compileSdk 34 checks passed.'
-          echo 'Java 17 is verified separately using the actual Gradle runtime in the next step.'
 
-      - name: Verify Java and Gradle runtime
+          grep -q 'VERSION_17' app/build.gradle
+
+          echo "Android configuration verified"
+
+      - name: Verify Java and Gradle
         shell: bash
         run: |
           set -Eeuo pipefail
           cd "$PROJECT_DIR/android"
+
           java -version
           ./gradlew --version
+
           ./gradlew --no-daemon --version | grep -q 'JVM:.*17'
 
-      - name: Build and verify Debug APK
+      - name: Build and verify APK
         shell: bash
         run: |
           set -Eeuo pipefail
           cd "$PROJECT_DIR/android"
+
           ./gradlew --no-daemon --stacktrace clean assembleDebug
 
-          APK='app/build/outputs/apk/debug/app-debug.apk'
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+
           test -s "$APK"
-          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose "$APK"
+
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" \
+            verify --verbose "$APK"
 
           mkdir -p "$GITHUB_WORKSPACE/output"
+
           cp "$APK" "$GITHUB_WORKSPACE/output/AAKNOVA.apk"
+
           test -s "$GITHUB_WORKSPACE/output/AAKNOVA.apk"
+
           ls -lh "$GITHUB_WORKSPACE/output/AAKNOVA.apk"
 
       - name: Upload AAKNOVA APK
