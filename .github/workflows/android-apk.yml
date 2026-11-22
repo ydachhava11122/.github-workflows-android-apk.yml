@@ -1,5 +1,5 @@
 
-name: AAKNOVA Complete Diagnostic and APK Build
+name: AAKNOVA Complete Android APK Build
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 jobs:
-  diagnose-and-build:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -20,7 +20,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Locate and Extract AAKNOVA ZIP
+      - name: Locate and Extract Project ZIP
         shell: bash
         run: |
           set -euo pipefail
@@ -28,20 +28,20 @@ jobs:
           ZIP_FILE=$(find . -maxdepth 2 -type f -iname "*.zip" | head -n 1)
 
           if [ -n "$ZIP_FILE" ]; then
-            echo "ZIP FOUND: $ZIP_FILE"
             mkdir -p "$RUNNER_TEMP/aaknova"
             unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/aaknova"
             PROJECT_DIR="$RUNNER_TEMP/aaknova"
-          elif [ -f "package.json" ]; then
+            echo "ZIP FOUND: $ZIP_FILE"
+          elif [ -f package.json ]; then
             PROJECT_DIR="$GITHUB_WORKSPACE"
           else
-            echo "ERROR: AAKNOVA ZIP or package.json missing"
+            echo "ERROR: Project ZIP not found"
             exit 1
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Complete Project Structure Check
+      - name: Check Project Files
         shell: bash
         run: |
           set -euo pipefail
@@ -59,20 +59,17 @@ jobs:
             android/variables.gradle \
             android/app/src/main/AndroidManifest.xml
           do
-            if [ -f "$FILE" ]; then
-              echo "[PASS] $FILE"
-            else
-              echo "[FAIL] Missing: $FILE"
+            if [ ! -f "$FILE" ]; then
+              echo "MISSING: $FILE"
               exit 1
             fi
+            echo "[PASS] $FILE"
           done
 
-          echo "[PASS] Project structure checked"
-
-      - name: Setup Node.js 22
+      - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "20"
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -80,47 +77,89 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Android SDK and Accept Licenses
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v4
         with:
           packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
           accept-android-sdk-licenses: true
           log-accepted-android-sdk-licenses: false
 
-      - name: Verify Build Environment
-        run: |
-          java -version
-          node --version
-          npm --version
-          sdkmanager --version
-
-      - name: Install Project Dependencies and Fix Vite
+      - name: Fix Dependency Versions
         shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
 
-          echo "Checking package.json..."
+          node <<'NODE'
+          const fs = require('fs');
+          const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
 
-          node -e "
-            const fs = require('fs');
-            const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            p.devDependencies = p.devDependencies || {};
-            p.devDependencies.esbuild = '^0.28.2';
-            fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
-          "
+          p.devDependencies = p.devDependencies || {};
+          p.devDependencies.esbuild = '0.28.2';
+          p.devDependencies.typescript = '5.9.3';
 
-          echo "Installing dependencies..."
+          fs.writeFileSync(
+            'package.json',
+            JSON.stringify(p, null, 2) + '\n'
+          );
+          NODE
+
+          echo "[PASS] esbuild and TypeScript versions fixed"
+
+      - name: Install Project Dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+
           npm install --no-audit --no-fund
 
-          echo "Installing Capacitor 6..."
           npm install --no-save --no-audit --no-fund \
             @capacitor/core@^6 \
             @capacitor/cli@^6 \
             @capacitor/android@^6
 
-          echo "Checking Vite and esbuild..."
-          npm ls vite esbuild @capacitor/core @capacitor/android
+          echo "Checking versions..."
+          node -e "
+            console.log('TypeScript:', require('typescript').version);
+            console.log('esbuild:', require('esbuild').version);
+          "
+
+          npm ls vite esbuild typescript \
+            @capacitor/core @capacitor/cli @capacitor/android
+
+      - name: Replace TypeScript Capacitor Config With JSON
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+
+          if [ -f capacitor.config.ts ]; then
+            mv capacitor.config.ts capacitor.config.ts.backup
+          fi
+
+          cat > capacitor.config.json <<'EOF'
+          {
+            "appId": "com.aaknova.enterprise",
+            "appName": "AAKNOVA",
+            "webDir": "dist"
+          }
+          EOF
+
+          echo "Checking JSON configuration..."
+          node -e "
+            const c = require('./capacitor.config.json');
+            if (
+              c.appId !== 'com.aaknova.enterprise' ||
+              c.appName !== 'AAKNOVA' ||
+              c.webDir !== 'dist'
+            ) {
+              throw new Error('Invalid Capacitor configuration');
+            }
+            console.log(c);
+          "
+
+          echo "[PASS] JSON Capacitor configuration ready"
 
       - name: Validate Capacitor
         shell: bash
@@ -129,7 +168,7 @@ jobs:
           cd "$PROJECT_DIR"
 
           npx cap --version
-          npx cap doctor || true
+          npx cap doctor
 
       - name: Build Web Application
         shell: bash
@@ -140,9 +179,9 @@ jobs:
           npm run build
 
           test -s dist/index.html
-          echo "[PASS] Web application built successfully"
+          echo "[PASS] Web application build completed"
 
-      - name: Sync Capacitor Android
+      - name: Sync Android Project
         shell: bash
         run: |
           set -euo pipefail
@@ -153,14 +192,14 @@ jobs:
           test -f android/capacitor.settings.gradle
           test -f android/capacitor.build.gradle
 
-          echo "[PASS] Android sync completed"
+          echo "[PASS] Capacitor Android sync completed"
 
-      - name: Setup Gradle 8.7
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.7"
 
-      - name: Generate Missing Gradle Wrapper
+      - name: Generate Gradle Wrapper
         shell: bash
         run: |
           set -euo pipefail
@@ -189,11 +228,11 @@ jobs:
           APK="app/build/outputs/apk/debug/app-debug.apk"
 
           if [ ! -s "$APK" ]; then
-            echo "[FAIL] APK was not generated"
+            echo "APK NOT GENERATED"
             exit 1
           fi
 
-          echo "[PASS] AAKNOVA APK GENERATED"
+          echo "[PASS] APK GENERATED"
           ls -lh "$APK"
 
       - name: Verify APK
@@ -203,11 +242,10 @@ jobs:
 
           APK="$PROJECT_DIR/android/app/build/outputs/apk/debug/app-debug.apk"
 
-          test -s "$APK"
-
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" \
             -name apksigner | sort -V | tail -n 1)
 
+          test -n "$APKSIGNER"
           "$APKSIGNER" verify "$APK"
 
           echo "[PASS] APK signature verified"
@@ -220,11 +258,14 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Final Build Report
+      - name: Build Report
         if: always()
         run: |
-          echo "AAKNOVA BUILD WORKFLOW FINISHED"
+          echo "================================"
+          echo "AAKNOVA ANDROID BUILD REPORT"
+          echo "================================"
           echo "Check previous steps for PASS or FAIL."
+          
           
           
           
