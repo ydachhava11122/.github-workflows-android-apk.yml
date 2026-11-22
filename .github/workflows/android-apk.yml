@@ -113,7 +113,8 @@ jobs:
           fi
 
           npm install --legacy-peer-deps
-          npm install react-is --save --legacy-peer-deps
+npm install react-is --save --legacy-peer-deps
+npm install typescript@5.7.3 --save-dev --legacy-peer-deps
 
       # 7. Keep all Capacitor packages on same version
       - name: Fix Capacitor Versions
